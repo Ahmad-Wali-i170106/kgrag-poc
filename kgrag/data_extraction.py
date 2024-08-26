@@ -1,14 +1,16 @@
 import os
 from typing import List, Dict, Any, Optional, Tuple
+
+
+from sentence_transformers import SentenceTransformer
 from langchain.pydantic_v1 import Field, BaseModel
 
-from langchain_community.graphs.neo4j_graph import Neo4jGraph
-
+from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.language_models import BaseLanguageModel
 
-from langchain_core.documents import Document
+from langchain_community.graphs.neo4j_graph import Neo4jGraph
+# from langchain_google_genai import ChatGoogleGenerativeAI
 
 SYSTEM_PROMPT = """# Knowledge Graph Instructions for GPT-4
 ## 1. Overview
@@ -138,32 +140,131 @@ class Text2KG:
             refresh_schema=True
         )
 
+        self.verbose = kwargs.get("verbose", False)
+        self._sim_thresh = kwargs.get("node_vector_similarity_threshold", 0.85)
+        self._ft_sim_thresh = kwargs.get("node_id_fulltext_similarity_threshold", 5)
+        
         self.data_ext_chain = get_extraction_chain(llm)
+        self.emb_model = SentenceTransformer(kwargs.get("embed_model_name", 'sentence-transformers/all-MiniLM-L6-v2'))
 
-        self.__create_fulltext_index()
+        self.__create_indexes()
 
-    def __create_fulltext_index(self):
-        query = "CREATE FULLTEXT INDEX IDsAndAliases IF NOT EXISTS FOR (n:Node) ON EACH [n.id, n.alias];"
-        self.graph.query(query)
+    def __create_indexes(self):
+        query = """CREATE FULLTEXT INDEX IDsAndAliases IF NOT EXISTS FOR (n:Node) ON EACH [n.id, n.alias];
+CREATE VECTOR INDEX IDsVectors IF NOT EXISTS FOR (n:Node) ON n.embedding
+OPTIONS { index_config: {
+    `vector.dimensions`: 384,
+    `vector.similarity_function`: 'cosine'
+} };
+"""
+        self.graph.query(query) # Create the fulltext and vector indexes
 
-    def _create_nodes(self, nodes: List[Node]):
+    def _embed(self, sents: List[str]):
+        return self.emb_model.encode(sents)
+
+    def _upsert_nodes(self, nodes: List[Node]):
         '''
         Create new nodes in the Neo4j KG from the given list of nodes
 
         Performs an additional step of resolving and merging each new node to an existing node 
         if it exceeds a certain similarity threshold with an existing node.
-        The ID of the new node is added to an alias property of the existing node
-        '''
-        pass
+        The ID of the new node is added to an alias property of the existing node.
+        If no match with an existing node is found, a new node is created.
 
-    def _create_rels(self, rels: List[Relationship]):
+        In affect, it is a more complicated form of MERGE clause that uses semantic similarity
+        to only create nodes that are considered semantically different.
+        '''
+        query = """UNWIND $nodes AS node
+CALL db.index.vector.queryNodes('IDsVectors', 1, node.embedding) YIELD node AS n, score
+WHERE score > $similarity_threshold AND apoc.label.exists(n, node.type)
+CALL apoc.do.when(n IS NULL,
+    'CALL apoc.create.node(["Node", node.type], {id: node.id}) YIELD node RETURN node AS n',
+    'FOREACH(x in CASE WHEN n.alias IS NULL OR NOT (node.id IN n.alias) THEN [1] END | SET n.alias = COALESCE(n.alias,[]) + node.id ) RETURN n',
+    {}
+)
+SET n += node.properties
+CALL db.create.setNodeVectorProperty(n, 'embedding', node.embedding)
+RETURN n;"""
+        
+        embeddings = self.emb_model.encode([node.id for node in nodes])
+        nodes = [
+            {
+                "id": node.id,
+                "type": node.type,
+                "properties": {p.key: p.value for p in node.properties},
+                "embedding": embeddings[i]
+
+            }
+            for i, node in enumerate(nodes)
+        ]
+        new_nodes = self.graph.query(query, params={"nodes": nodes, "similarity_threshold": self._sim_thresh})
+        if self.verbose:
+            print(new_nodes)
+
+    def _upsert_rels(self, rels: List[Relationship]):
         '''
         Creates new relationships between existing nodes in the KG
         '''
-        pass
+        query = """UNWIND $rels AS rel
+CALL {
+    CALL db.index.fulltext.queryNodes('IDsAndAliases', rel.start_node_id) YIELD node, score
+    WHERE score > $similarity_threshold
+    RETURN node AS start_node
+}
+CALL {
+    CALL db.index.fulltext.queryNodes('IDsAndAliases', rel.end_node_id) YIELD node, score
+    WHERE score > $similarity_threshold
+    RETURN node AS end_node
+}
+CALL apoc.merge.relationship(start_node, rel.type, rel.properties, {}, end_node, {}) YIELD rel
+RETURN rel;"""
+
+        rels = [
+            {
+                "start_node_id": rel.start_node_id,
+                "end_node_id": rel.end_node_id,
+                "type": rel.type,
+                "properties": {p.key: p.value for p in rel.properties}
+            }
+            for rel in rels
+        ]
+        new_rels = self.graph.query(query, params={"rels": rels, "similarity_threshold": self._ft_sim_thresh})
+        if self.verbose:
+            print(new_rels)
 
     def _create_text_nodes(self, docs: List[Document]):
-        pass
+        '''
+        Creates new Text nodes also called DocumentPage nodes
+        '''
+        cquery = """MERGE (d: DocumentPage {source: $source})
+SET
+    d = $properties,
+    d.source = $source,
+    d.text = $text
+RETURN d;"""
+
+        mentions_query = """UNWIND $mentions AS mention_id
+CALL db.index.fulltext.queryNodes('IDsAndAliases', mention_id) YIELD node, score
+WHERE score > $similarity_threshold
+MATCH (d: DocumentPage {source: $source})
+MERGE (d)-[:MENTIONS]->(node);"""
+        for doc in docs:
+            mentions = doc.metadata.pop("mentions", [])
+            source = doc.metadata.pop("source", doc.metadata.get("filename", "") + " Page: " + str(doc.metadata.get("page", 0)))
+            params = {
+                "text": doc.page_content,
+                "source": source,
+                "properties": doc.metadata
+            }
+            new_doc_node = self.graph.query(cquery, params=params)
+            if self.verbose:
+                print(new_doc_node)
+            params = {
+                "source": source, 
+                "mentions": mentions, 
+                "similarity_threshold": self._ft_sim_thresh
+            }
+            self.graph.query(mentions_query, params=params)
 
     
     def __get_existing_labels(self) -> Tuple[set, set]:
@@ -172,7 +273,7 @@ class Text2KG:
         return set(node_props.keys()), set(rel_props.keys())
 
     
-    def docs2nodes_and_rels(self, docs: List[Document], verbose: bool = False) -> Tuple[List[Document], List[Node], List[Relationship]]:
+    def docs2nodes_and_rels(self, docs: List[Document]) -> Tuple[List[Document], List[Node], List[Relationship]]:
         
         # Only store unique nodes and relationships - Helps later when adding to neo4j
         nodes_dict: Dict[str, set] = dict({})
@@ -191,7 +292,7 @@ class Text2KG:
                 }
             )
             if output is not None:
-                if verbose:
+                if self.verbose:
                     print('-'*100)
                     print(f"Doc # {i+1}")
                     print(f"Nodes: {output.nodes}")
@@ -225,4 +326,9 @@ class Text2KG:
 
         return docs, nodes, list(rels)
 
+    def text2kg(self, docs: List[Document]):
+        docs, nodes, rels = self.docs2nodes_and_rels(docs)
         
+        self._upsert_nodes(nodes)
+        self._upsert_rels(rels)
+        self._create_text_nodes(docs)
