@@ -115,6 +115,13 @@ def _format_json_schema_to_gapic(schema: Dict[str, Any]) -> Dict[str, Any]:
                     pvalue
                 )
             continue
+        elif key == "allOf":
+            if len(value) > 1:
+                logger.warning(
+                    "Only first value for 'allOf' key is supported. "
+                    f"Got {len(value)}, ignoring other than first value!"
+                )
+            return _format_json_schema_to_gapic(value[0])
         elif key in ["type", "_type"]:
             converted_schema["type"] = str(value).upper()
         elif key not in _ALLOWED_SCHEMA_FIELDS_SET:
@@ -124,11 +131,13 @@ def _format_json_schema_to_gapic(schema: Dict[str, Any]) -> Dict[str, Any]:
     return converted_schema
 
 
-def _dict_to_gapic_schema(schema: Dict[str, Any]) -> gapic.Schema:
-    dereferenced_schema = dereference_refs(schema)
-    formatted_schema = _format_json_schema_to_gapic(dereferenced_schema)
-    json_schema = json.dumps(formatted_schema)
-    return gapic.Schema.from_json(json_schema)
+def _dict_to_gapic_schema(schema: Dict[str, Any]) -> Optional[gapic.Schema]:
+    if schema:
+        dereferenced_schema = dereference_refs(schema)
+        formatted_schema = _format_json_schema_to_gapic(dereferenced_schema)
+        json_schema = json.dumps(formatted_schema)
+        return gapic.Schema.from_json(json_schema)
+    return None
 
 
 def _format_dict_to_function_declaration(
@@ -204,7 +213,11 @@ def _format_to_gapic_function_declaration(
             function = cast(dict, tool)
             function["parameters"] = {}
         else:
-            function = convert_to_openai_tool(cast(dict, tool))["function"]
+            if "parameters" in tool and tool["parameters"].get("properties"):
+                function = convert_to_openai_tool(cast(dict, tool))["function"]
+            else:
+                function = cast(dict, tool)
+                function["parameters"] = {}
         return _format_dict_to_function_declaration(cast(FunctionDescription, function))
     elif callable(tool):
         return _format_base_tool_to_function_declaration(callable_as_lc_tool()(tool))
