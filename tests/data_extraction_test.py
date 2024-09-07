@@ -7,7 +7,8 @@ load_dotenv('../.env')
 # print(os.environ.get("GOOGLE_API_KEY"))
 
 from kgrag.data_extraction import Text2KG
-from kgrag.parsers_loaders import PDFLoader
+# from kgrag.parsers_loaders import PDFLoader
+from kgrag.parse_pdf import PDFParser
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 # from langchain_google_genai.embeddings import GoogleGenerativeAIEmbeddings
@@ -35,8 +36,18 @@ text2kg = Text2KG(
 ) # 
 
 
-loader = PDFLoader(filepath, extract_images=True)
+# loader = PDFLoader(filepath, extract_images=True)
+parser = PDFParser(filepath, ChatGoogleGenerativeAI(model="models/gemini-1.0-pro"))
 
-docs: List[Document] = loader.load()
+# docs: List[Document] = loader.load()
+docs = parser.process_pdf_document()
+
+docs: List[Document] = [
+    Document(
+        page_content=doc['text'],
+        metadata={**doc['page_metadata'], **doc['doc_metadata']}
+    )
+    for doc in docs
+]
 
 text2kg.process_documents(docs)

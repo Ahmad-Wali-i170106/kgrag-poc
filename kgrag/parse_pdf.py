@@ -1,5 +1,5 @@
-
-from .prompt import extract_chapter
+from typing import Any, Literal, List, Dict
+from kgrag.prompt import extract_chapter
 import os
 os.environ["TESSDATA_PREFIX"] = "/usr/share/tesseract-ocr/4.00/tessdata"
 import pymupdf
@@ -82,11 +82,11 @@ class PDFParser():
     
 
 
-  def get_document_metadata(self):
+  def get_document_metadata(self) -> Dict[str, Any | Literal['']] | None:
     """Extracts metadata from a PDF document. """
     return self.doc.metadata
   
-  def process_pdf_document(self, num_of_pages: int = None):
+  def process_pdf_document(self, num_of_pages: int = None) -> List[Dict[str, Any]]:
     if not num_of_pages:
       num_of_pages = len(self.doc)
     self.pdf_data = []
@@ -95,8 +95,16 @@ class PDFParser():
     for page_num, page in enumerate(self.doc):
       if page_num <= num_of_pages:
         self.pdf_data.append(self.extract_page_info(page_num=page_num+1, page=page, doc_metadata=doc_metadata, toc=toc))
+      else:
+        return self.pdf_data
     self.doc.close()
     return self.pdf_data
+  
+  # def load_as_documents(self, num_of_pages: int = None) -> list:
+  #   docs = self.process_pdf_document()
+  #   return [
+  #     Document
+  #   ]
 
 
 """
