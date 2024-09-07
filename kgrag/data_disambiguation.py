@@ -1,6 +1,8 @@
 '''
-
+Contains code to remove duplicate nodes and relationships if they have similar node IDs
+Uses an LLM with JSON output and input to remove duplicates.
 '''
+
 import json
 import re
 from itertools import groupby
