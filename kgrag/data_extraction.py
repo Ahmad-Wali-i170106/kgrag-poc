@@ -249,7 +249,7 @@ RETURN DISTINCT nn;
             {
                 "id": node.id,
                 "type": node.type,
-                "properties": {} #{p.key: p.value for p in node.properties},
+                "properties": {}, #{p.key: p.value for p in node.properties},
                 "embedding": list(embeddings[i])
 
             }
