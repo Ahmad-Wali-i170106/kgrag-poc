@@ -10,7 +10,7 @@ from itertools import groupby
 from kgrag.data_schema_utils import (
     Node,
     Relationship,
-    Property,
+    # Property,
     nodesTextToListOfNodes,
     relationshipTextToListOfRelationships,
 )
@@ -72,7 +72,7 @@ class DataDisambiguation:
             {
                 'name': node.id,
                 'label': node.type,
-                'properties': {p.key: p.value for p in node.properties}
+                'properties': {} #{p.key: p.value for p in node.properties}
             }
             for node in nodes
         ]
@@ -81,7 +81,7 @@ class DataDisambiguation:
                 "start": rel.start_node_id,
                 "end": rel.end_node_id,
                 "type": rel.type,
-                "properties": {p.key: p.value for p in rel.properties}
+                "properties": {} #{p.key: p.value for p in rel.properties}
             }
             for  rel in relationships
         ]
