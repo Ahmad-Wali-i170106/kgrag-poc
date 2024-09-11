@@ -16,7 +16,7 @@ def wikidata_fetch(params: Dict[str, str]) -> Dict[str, Any] | str:
             print(data.status_code, data.content)
             return "There was a problem with getting the results"
     except:
-        return 'There was and error'
+        return 'There was an error'
 
 def wikidata_search(query: str) -> List[Dict[str, Any]]:
     if len(query) == 0:
@@ -81,6 +81,14 @@ def wikidata_search(query: str) -> List[Dict[str, Any]]:
             # search_results[id]['aliases'] = [al.get('value', '') for al in ent['aliases'].get('en', [])]
             
     return list(search_results.values())
+
+def wikipedia_search(query):
+    try:
+        res = wd.search(query)
+        if len(res) > 0:
+            return res
+    except:
+        return "There was an error"
 
 if __name__ == "__main__":
     # q = "OpenAI Generative Pre-trained Transformer"
