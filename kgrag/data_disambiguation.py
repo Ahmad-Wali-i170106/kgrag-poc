@@ -103,7 +103,7 @@ class DataDisambiguation:
                     Node(
                         id=nodes_in_group[0]['name'], 
                         type=nodes_in_group[0]['label'],
-                        properties=[Property(key=k, value=v) for k, v in nodes_in_group[0]['properties'].items()]
+                        # properties=[Property(key=k, value=v) for k, v in nodes_in_group[0]['properties'].items()]
                     )
                 )
                 continue

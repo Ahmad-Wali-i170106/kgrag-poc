@@ -16,12 +16,13 @@ from langchain_community.graphs import Neo4jGraph
 from langchain_community.vectorstores.neo4j_vector import remove_lucene_chars
 
 from kgrag.data_schema_utils import Entities
+from kgrag.prompts import CYPHER_GENERATION_SYSTEM
 
 def get_examples(query: str, max_examples: int = 10) -> List[str]:
     '''
     Gets `max_examples` or less cypher examples that are most similar to the input query
     '''
-    pass
+    
 
 def extract_cypher(text: str) -> str:
     """Extract Cypher code from a text.
@@ -230,19 +231,7 @@ class KGSearch:
             [
                 (
                     "system",
-                    """Task:Generate Cypher statement to query a graph database.
-Instructions:
-Use only the provided relationship types and properties in the schema.
-Do not use any other relationship types or properties that are not provided.
-Schema:
-{schema}
-Note: Do not include any explanations or apologies in your responses.
-Do not respond to any questions that might ask anything else than for you to construct a Cypher statement.
-Do not include any text except the generated Cypher statement.
-Examples: Here are a few examples of generated Cypher statements for particular questions:
-
-{examples}
-"""
+                    CYPHER_GENERATION_SYSTEM
                 ),
                 (
                     "human",
@@ -320,7 +309,6 @@ Examples: Here are a few examples of generated Cypher statements for particular 
             docs: str = '\n\n'.join([f"{doc['text']}\nSOURCE: {doc['source']}" for doc in docs])
             return f"Nodes Relations: {rels}\nNode Documents:\n{docs}"
         else:
-            # TODO: GENERATE CYPHER USING GRAPHCYPHERQACHAIN THAT ALWAYS RETURNS NODE IDS
             examples: List[str] = get_examples(query, max_examples=self.max_examples)
             examples: str = '\n\n'.join(examples)
             graph_schema = construct_schema(
