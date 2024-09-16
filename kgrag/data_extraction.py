@@ -44,13 +44,6 @@ You must extract information that seems most relevant to the overall subject the
 - - Following are some existing node/entity types that were extracted from previous samples of the same document:\n{node_types}
 ## 3. Labeling Relationships
 - **Relationship Type Naming Convention**: Relationship types should be written in SCREAMING_SNAKE_CASE.
-## 4. Handling Numerical Data and Dates
-- Numerical data, like age or other related information, should be incorporated as attributes or properties of the respective nodes.
-- **No Separate Nodes for Dates/Numbers**: Do not create separate nodes for dates or numerical values. Always attach them as attributes or properties of nodes.
-- **Property Format**: Properties must be in a key-value format.
-- **Quotation Marks**: Never use escaped single or double quotes within property values.
-- **Naming Convention**: Use camelCase for property keys.
-- **Type Property**: NEVER include the `type` property in the list of properties.
 ## 5. Coreference Resolution
 - **Maintain Entity Consistency**: When extracting entities, it's vital to ensure consistency.
 - If an entity, such as "John Doe", is mentioned multiple times in the text but is referred to by different names or pronouns (e.g., "Joe", "he"), 
@@ -60,6 +53,14 @@ always use the most complete identifier for that entity throughout the knowledge
 Remember, the knowledge graph should be coherent and easily understandable, so maintaining consistency in entity references is crucial. 
 ## 6. Strict Compliance
 Adhere to the rules strictly. Non-compliance will result in termination."""
+
+# ## 4. Handling Numerical Data and Dates
+# - Numerical data, like age or other related information, should be incorporated as attributes or properties of the respective nodes.
+# - **No Separate Nodes for Dates/Numbers**: Do not create separate nodes for dates or numerical values. Always attach them as attributes or properties of nodes.
+# - **Property Format**: Properties must be in a key-value format.
+# - **Quotation Marks**: Never use escaped single or double quotes within property values.
+# - **Naming Convention**: Use camelCase for property keys.
+# - **Type Property**: NEVER include the `type` property in the list of properties.
 
 
 
@@ -238,17 +239,17 @@ RETURN DISTINCT nn;
         # That will be used to calculate similarity
         emb_strings: List[str] = []
         for node in nodes:
-            props: str = ', '.join([f"{p.key}: {p.value}" for p in node.properties if isinstance(p.value, str) or isinstance(p.value, int)])
-            if len(props) > 0:
-                emb_strings.append(f"{node.id} {{{props}}}")
-            else:
-                emb_strings.append(node.id)
+            # props: str = ', '.join([f"{p.key}: {p.value}" for p in node.properties if isinstance(p.value, str) or isinstance(p.value, int)])
+            # if len(props) > 0:
+            #     emb_strings.append(f"{node.id} {{{props}}}")
+            # else:
+            emb_strings.append(node.id)
         embeddings: List[List[float | double[Any]]] = self._embed(emb_strings)
         nodes = [
             {
                 "id": node.id,
                 "type": node.type,
-                "properties": {p.key: p.value for p in node.properties},
+                "properties": {}, #{p.key: p.value for p in node.properties},
                 "embedding": list(embeddings[i])
 
             }
@@ -286,7 +287,7 @@ RETURN DISTINCT start_node{.id,.alias}, rel, end_node{.id, .alias};"""
                 "start_node_id": ' '.join([r.strip() for r in rel.start_node_id.split(' ') if len(r.strip()) > 0]),
                 "end_node_id": ' '.join([r.strip() for r in rel.end_node_id.split(' ') if len(r.strip()) > 0]),
                 "type": rel.type,
-                "properties": {p.key: p.value for p in rel.properties}
+                "properties": {} #{p.key: p.value for p in rel.properties}
             }
             for rel in rels
         ]

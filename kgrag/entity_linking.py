@@ -2,8 +2,12 @@ import re
 import json
 import requests
 import itertools
+import numpy as np
 from typing import Dict, Any, List, Tuple, Optional
 import wikipedia as wd
+from kgrag.data_schema_utils import * 
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 def wikidata_fetch(params: Dict[str, str]) -> Dict[str, Any] | str:
@@ -89,6 +93,30 @@ def wikipedia_search(query):
             return res
     except:
         return "There was an error"
+    
+def calculate_cosine_similarity(sentences: list):
+    # Initializing the Sentence Transformer model using BERT with mean-tokens pooling
+    model = SentenceTransformer('bert-base-nli-mean-tokens')
+
+    # Encoding the sentences to obtain their embeddings
+    sentence_embeddings = model.encode(sentences)
+
+    # Calculating the cosine similarity between the first sentence embedding and the rest of the embeddings
+    # The result will be a list of similarity scores between the first sentence and each of the other sentences
+    similarity_scores = cosine_similarity([sentence_embeddings[0]], sentence_embeddings[1:])
+    return similarity_scores
+
+def match_entity(entities: list[Node], orig_text: str):
+    matched_nodes = []
+    for entity in entities:
+        res = wikidata_search(entity["id"])
+        sentences = [orig_text]
+        sentences.extend([r['description'] for r in res])
+        scores = calculate_cosine_similarity(sentences)
+        ind = np.argmax(scores[0])
+        dic = {"id": res[ind]["id"], "desc": res[ind]["description"], "type": entity["type"], "wiki_type": res[ind]["type"],"alias": [entity["id"]]}
+        matched_nodes.append(dic)
+    return matched_nodes
 
 if __name__ == "__main__":
     # q = "OpenAI Generative Pre-trained Transformer"
