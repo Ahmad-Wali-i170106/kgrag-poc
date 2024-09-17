@@ -1,0 +1,18 @@
+[
+    {
+        "question": "How does relation extraction work?",
+        "cypher": "CALL db.index.fulltext.query('IDsAndAliases', 'relation~ extraction~') YIELD node, score\nMATCH (node: Node)-[r]-(target)\nRETURN DISTINCT node, target, r AS relationship;"
+    },
+    {
+        "question": "Describe the working of air coolers.",
+        "cypher": "CALL db.index.fulltext.query('IDsAndAliases', 'air~ coolers~') YIELD node, score\nMATCH (node)-[r]-(target)\nRETURN DISTINCT node, target, r AS relationship;"
+    },
+    {
+        "question": "Summarise the technip process engineering guide",
+        "cypher": "MATCH (d: DocumentPage) WHERE d.filename =~ '(?i).*process.*engineering.*guide.*' RETURN d;"
+    },
+    {
+        "question": "Summarise chapter 3 of 'leadership' by etsko schuitema",
+        "cypher": "MATCH (d: DocumentPage) WHERE d.source =~ '(?i).*leader.*' AND d.chaper_number = 3 RETURN d;"
+    }
+]

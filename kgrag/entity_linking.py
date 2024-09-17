@@ -94,9 +94,8 @@ def wikipedia_search(query):
     except:
         return "There was an error"
     
-def calculate_cosine_similarity(sentences: list):
+def calculate_cosine_similarity(sentences: list, model: SentenceTransformer):
     # Initializing the Sentence Transformer model using BERT with mean-tokens pooling
-    model = SentenceTransformer('bert-base-nli-mean-tokens')
 
     # Encoding the sentences to obtain their embeddings
     sentence_embeddings = model.encode(sentences)
@@ -107,12 +106,13 @@ def calculate_cosine_similarity(sentences: list):
     return similarity_scores
 
 def match_entity(entities: list[Node], orig_text: str):
+    model = SentenceTransformer('bert-base-nli-mean-tokens')
     matched_nodes = []
     for entity in entities:
         res = wikidata_search(entity["id"])
         sentences = [orig_text]
         sentences.extend([r['description'] for r in res])
-        scores = calculate_cosine_similarity(sentences)
+        scores = calculate_cosine_similarity(sentences, model)
         ind = np.argmax(scores[0])
         dic = {"id": res[ind]["id"], "desc": res[ind]["description"], "type": entity["type"], "wiki_type": res[ind]["type"],"alias": [entity["id"]]}
         matched_nodes.append(dic)

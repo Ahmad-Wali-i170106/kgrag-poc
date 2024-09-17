@@ -293,12 +293,12 @@ RETURN DISTINCT d.source, node.alias"""
 
             source: str = doc.metadata.pop("source", '')
             if source is not None or len(source) > 0:
-                if not "page" in source:
+                if not "page" in source.lower():
                     source = f"{source.split('/')[-1]} Page: {str(doc.metadata.get('page', 0))}"
             elif 'filename' in doc.metadata:
-                source = f"{doc.metadata.get('filename', '')} Page: {str(doc.metadata.get('page', 0))}"
+                source = f"{doc.metadata.get('filename', '').split('/')[-1]} Page: {str(doc.metadata.get('page', 0))}"
             elif 'filepath' in doc.metadata:
-                source = f"{doc.metadata.get('filepath', '')} Page: {str(doc.metadata.get('page', 0))}"
+                source = f"{doc.metadata.get('filepath', '').split('/')[-1]} Page: {str(doc.metadata.get('page', 0))}"
             else:
                 for k, v in doc.metadata.items():
                     if 'file' in k or 'source' in k:

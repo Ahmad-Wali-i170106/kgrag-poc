@@ -9,17 +9,17 @@ load_dotenv('../.env')
 # print(os.environ.get("GOOGLE_API_KEY"))
 
 from kgrag.data_extraction import Text2KG
-from kgrag.parse_pdf import PDFParser
+from kgrag.parse_pdf import PDFParser, OCREngine
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 # from langchain_google_genai.embeddings import GoogleGenerativeAIEmbeddings
-from langchain_community.document_loaders import PyMuPDFLoader
+# from langchain_community.document_loaders import PyMuPDFLoader
 
 set_llm_cache(InMemoryCache())
 # set_llm_cache(RedisCache(ttl=3600))
 
-# filepath = '/media/wali/D_Drive/DreamAI/KGRAG_POC/SampleDocs/Leadership-Etsko-Schuitema.pdf'
-filepath = "/media/wali/D_Drive/DreamAI/KGRAG_POC/SampleDocs/Technip Process Eng Guide.pdf"
+filepath = '/media/wali/D_Drive/DreamAI/KGRAG_POC/SampleDocs/Leadership-Etsko-Schuitema.pdf'
+# filepath = "/media/wali/D_Drive/DreamAI/KGRAG_POC/SampleDocs/Technip Process Eng Guide.pdf"
 # filepath = '/media/wali/D_Drive/Documents/FYP/FYP_Biomedical_FinalResearchPaper.pdf'
 # filepath = '/home/wali/FYP_Biomedical_FinalResearchPaper.pdf'
 # filepath = '/media/wali/D_Drive/Documents/FYP/Literature/Biomedical_relation_extraction_with_pre-trained_language_representations_and_minimal_task-specific_architecture.pdf'
@@ -33,10 +33,15 @@ filepath = "/media/wali/D_Drive/DreamAI/KGRAG_POC/SampleDocs/Technip Process Eng
 
 llm = ChatGoogleGenerativeAI(model="models/gemini-1.0-pro", temperature=0)
 
-parser = PDFParser(filepath, llm)
+parser = PDFParser(
+    filepath,
+    OCREngine.PYTESSERACT,
+    llm,
+    ChatGoogleGenerativeAI(model='models/gemini-1.5-flash', temperature=0.1)
+) #, 
 
 # docs: List[Document] = loader.load()
-doc_dicts: List[Dict[str, Any]] = parser.process_pdf_document(num_of_pages=18)
+doc_dicts: List[Dict[str, Any]] = parser.process_pdf_document(num_of_pages=21)
 
 docs: List[Document] = [
     Document(

@@ -155,11 +155,10 @@ def relationshipTextToListOfRelationships(rels_str: List[str]) -> List[Relations
 
 class PageMetadata(BaseModel):
     chapter_title: str
-    chapter_num: int
 
 def extract_chapter(text: str, model):
     parser = JsonOutputParser(pydantic_object=PageMetadata)
-    template = "Please find if the input text from the user is the first page from a new chapter. If so, extract chapter number and chapter title from the input text. Otherwise, leave the answer empty.\n{format_instructions}\n{text}"
+    template = "Please find if the input text from the user is the first page from a new chapter. If so, extract chapter title from the input text. Otherwise, leave the answer empty.\n{format_instructions}\n{text}"
     # user_message = f"""{text}"""
     prompt = PromptTemplate.from_template(template=template, partial_variables={"format_instructions":parser.get_format_instructions()})
 

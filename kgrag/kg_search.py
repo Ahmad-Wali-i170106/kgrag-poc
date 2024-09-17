@@ -17,12 +17,7 @@ from langchain_community.vectorstores.neo4j_vector import remove_lucene_chars
 
 from kgrag.data_schema_utils import Entities
 from kgrag.prompts import CYPHER_GENERATION_SYSTEM
-
-def get_examples(query: str, max_examples: int = 10) -> List[str]:
-    '''
-    Gets `max_examples` or less cypher examples that are most similar to the input query
-    '''
-    
+from kgrag.examples_getter import ExamplesGetter
 
 def extract_cypher(text: str) -> str:
     """Extract Cypher code from a text.
@@ -187,7 +182,7 @@ LIMIT $limit""".strip()
 
 docs_query: LiteralString = """
 MATCH (n: Node)<-[:MENTIONS]-(d:DocumentPage)
-RETURN n.id AS entity, d.source AS document_source, d.text AS document_text
+RETURN DISTINCT n.id AS entity, d.source AS document_source, d.text AS document_text
 LIMIT $limit""".strip()
 
 fulltext_search_cypher: LiteralString = """
@@ -201,7 +196,7 @@ RETURN n.id AS n, score LIMIT $top_k;
 
 class KGSearch:
     
-    def __init__(self, ent_llm: BaseLanguageModel, cypher_llm: BaseLanguageModel, **kwargs):
+    def __init__(self, ent_llm: BaseLanguageModel, cypher_llm: BaseLanguageModel, cypher_examples_json: str | None = None, **kwargs):
 
         url: str = os.environ.get("NEO4J_URL", kwargs.get("neo4j_url", "bolt://localhost:7687"))
         username: str = os.environ.get("NEO4J_USERNAME", kwargs.get("neo4j_username", "neo4j"))
@@ -246,7 +241,7 @@ class KGSearch:
         self.min_score: float = kwargs.get("fulltext_search_min_score", 1.0)
         self.top_k: int = kwargs.get("fulltext_search_top_k", 10)
         self.max_examples: int = kwargs.get("max_cypher_fewshot_examples", 15)
-
+        self.example_getter = ExamplesGetter(cypher_examples_json)
         
         self._include_types: List[str] = kwargs.get("include_node_types", [])
         self._exclude_types: List[str] = kwargs.get("exclude_node_types", [])
@@ -269,62 +264,70 @@ class KGSearch:
         full_text_query: str = ""
         words: List[str] = [el for el in remove_lucene_chars(input).split() if el]
         for word in words[:-1]:
-            full_text_query += f" {word}~3 OR"
-        full_text_query += f" {words[-1]}~3"
+            full_text_query += f"{word}~3 OR "
+        full_text_query += f"{words[-1]}~3"
         return full_text_query.strip()
 
+    def retrieve_fulltext(self, entities, nresults: int = 100) -> str:
+        node_ids = []
+        for ent in entities:
+            output: List[Dict[str, str | float]] = self.graph.query(
+                fulltext_search_cypher, 
+                params={
+                    "search_term": self.generate_full_text_query(ent),
+                    "min_score": self.min_score,
+                    "top_k": self.top_k
+                }
+            )
+            for i, o in enumerate(output):
+                if i == 0:
+                    node_ids.append(o['n'])
+                else:
+                    diff: float = o['score'] - output[i-1]['score']
+                    if diff >= self.max_difference:
+                        break
+                    node_ids.append(o['n'])
+        rels = self.graph.query(
+            f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{rels_query}", 
+            {"node_ids": node_ids, "limit": nresults}
+        )
+        docs = self.graph.query(
+            f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{docs_query}", 
+            {"node_ids": node_ids, "limit": nresults}
+        )
+        rels: str = '\n'.join([rel['output_string'] for rel in rels])
+        docs: str = '\n\n'.join([f"{doc['text']}\nSOURCE: {doc['source']}" for doc in docs])
+        return f"Nodes Relations: {rels}\nNode Documents:\n{docs}"
+    
+    def retrieve_custom_cypher(self, query: str, nresults: int) -> str:
+        examples: List[str] = self.example_getter.get_examples(query, top_k=self.max_examples)
+        examples: str = '\n'.join(examples)
+        examples = f"""Examples: Here are a few examples of generated Cypher statements for particular questions:
+{examples}"""
+        graph_schema = construct_schema(
+            self.graph.get_structured_schema, self._include_types, self._exclude_types
+        )
+        cypher: str = self.cypher_generation_chain.invoke(
+            {
+                "schema": graph_schema,
+                "examples": examples,
+                "question": query,
+            }
+        )
+        cypher = extract_cypher(cypher)
+        if cypher:
+            result: List[Dict[str, Any]] = self.graph.query(cypher)[:nresults]
+        else:
+            result = []
+        return '\n'.join(result)
+    
     def retrieve(self, query: str, nresults: int = 100, use_fulltext_search: bool = True) -> str:        
         if use_fulltext_search:
             entities: List[str] = self.entity_chain.invoke({"question": query}).names
             if len(entities) == 0:
-                return ""
-            # If I can extract entities, then always use fulltext search
-            node_ids = []
-            for ent in entities:
-                output: List[Dict[str, str | float]] = self.graph.query(
-                    fulltext_search_cypher, 
-                    params={
-                        "search_term": self.generate_full_text_query(ent),
-                        "min_score": self.min_score,
-                        "top_k": self.top_k
-                    }
-                )
-                for i, o in enumerate(output):
-                    if i == 0:
-                        node_ids.append(o['n'])
-                    else:
-                        diff: float = o['score'] - output[i-1]['score']
-                        if diff >= self.max_difference:
-                            break
-                        node_ids.append(o['n'])
-            rels = self.graph.query(
-                f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{rels_query}", 
-                {"node_ids": node_ids, "limit": nresults}
-            )
-            docs = self.graph.query(
-                f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{docs_query}", 
-                {"node_ids": node_ids, "limit": nresults}
-            )
-            rels: str = '\n'.join([rel['output_string'] for rel in rels])
-            docs: str = '\n\n'.join([f"{doc['text']}\nSOURCE: {doc['source']}" for doc in docs])
-            return f"Nodes Relations: {rels}\nNode Documents:\n{docs}"
+                 return self.retrieve_custom_cypher(query, nresults)
+            # If I can extract entities, then use fulltext search
+            return self.retrieve_fulltext(entities,nresults)
         else:
-            examples: List[str] = get_examples(query, max_examples=self.max_examples)
-            examples: str = '\n\n'.join(examples)
-            graph_schema = construct_schema(
-                self.graph.get_structured_schema, self._include_types, self._exclude_types
-            )
-            cypher: str = self.cypher_generation_chain.invoke(
-                {
-                    "schema": graph_schema,
-                    "examples": examples,
-                    "question": query,
-                }
-            )
-            cypher = extract_cypher(cypher)
-            if cypher:
-                result: List[Dict[str, Any]] = self.graph.query(cypher)[:nresults]
-            else:
-                result = []
-            return '\n'.join(result)
+            return self.retrieve_custom_cypher(query, nresults)
         
