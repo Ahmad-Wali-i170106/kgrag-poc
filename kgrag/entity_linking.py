@@ -13,7 +13,7 @@ def camel_case_to_normal(name: str) -> str:
     name = re.sub('(.)([A-Z][a-z]+)', r'\1 \2', name)
     name = re.sub('  ([A-Z])', r' \1', name)
     name = re.sub('([a-z0-9])([A-Z])', r'\1 \2', name)
-    return name
+    return name.lower()
 
 def convert_case(text: str) -> str:
     # Add space before any uppercase letter that follows a lowercase letter
@@ -30,7 +30,7 @@ def convert_case(text: str) -> str:
     pattern = re.compile(r'([a-zA-Z])(\d)')
     text = pattern.sub(r'\1 \2', text)
     
-    return text
+    return text.lower()
 
 def wikidata_fetch(params: Dict[str, str]) -> Dict[str, Any] | str:
     url = 'https://www.wikidata.org/w/api.php'
@@ -72,7 +72,7 @@ def wikidata_search(query: str) -> List[Dict[str, Any]]:
                         'id': r['id'],
                         'url': r['url'],
                         'label': r.get('label', ''),
-                        'aliases': r.get('aliases', []),
+                        'aliases': ', '.join(r.get('aliases', [])),
                         'description': r.get('description', ''),
                         'type': ''
                     }
@@ -121,7 +121,11 @@ def wikipedia_search(query):
         return "There was an error"
     
 def calculate_cosine_similarity(sentences: list, model: SentenceTransformer):
-    
+    '''
+    TODO: Create new similarity function that combines cosine similarity with lexical similarity (levenshstein distance maybe) to improve results
+
+    DOESN'T find match for BERT with 0.7 sim_cutoff
+    '''
 
     # Encoding the sentences to obtain their embeddings
     sentence_embeddings = model.encode(sentences)
