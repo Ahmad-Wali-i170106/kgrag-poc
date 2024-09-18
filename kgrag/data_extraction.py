@@ -18,6 +18,7 @@ from langchain_community.graphs.neo4j_graph import value_sanitize
 
 from kgrag.data_schema_utils import * 
 from kgrag.data_disambiguation import DataDisambiguation
+from kgrag.entity_linking import link_nodes
 from kgrag.prompts import DATA_EXTRACTION_SYSTEM
 
 
@@ -57,6 +58,7 @@ class Text2KG:
             llm: BaseLanguageModel, 
             emb_model: Embeddings | None = None, 
             disambiguate_nodes: bool = False,
+            link_nodes: bool = True,
             **kwargs
         ) -> None:
 
@@ -112,6 +114,8 @@ You must extract information that appears most relevant to this provided subject
         else:
             self.disambiguator = None
         
+        self.link_nodes = link_nodes
+
         self.__create_indexes()
 
     def __create_indexes(self) -> None:
@@ -186,12 +190,13 @@ CALL (nd) {
     RETURN collect(n)[0] AS n
 }
 CALL apoc.do.when(n IS NULL,
-    'CALL apoc.merge.node(["Node", $ntype], {id: $nid}) YIELD node RETURN node',
-    'CALL apoc.create.addLabels($n, [$ntype]) YIELD node RETURN node',
+    'CALL apoc.merge.node(["Node"], {id: $nid}) YIELD node RETURN node',
+    'RETURN $n',
     {n: n, ntype: nd.type, nid: nd.id}
 )
 YIELD value AS nn
 WITH nd AS nd, nn.node AS nn
+CALL apoc.create.addLabels(nn, [nd.type])
 CALL db.create.setNodeVectorProperty(nn, 'embedding', nd.embedding)
 SET nn += nd.properties
 FOREACH(x in CASE WHEN nn.alias IS NULL OR NOT (nd.id IN nn.alias OR nd.id = nn.id) THEN [1] END | 
@@ -199,8 +204,7 @@ FOREACH(x in CASE WHEN nn.alias IS NULL OR NOT (nd.id IN nn.alias OR nd.id = nn.
 RETURN DISTINCT nn;
 """
 
-        # Use Node ID, Node Type & string properties to create a string to generate embeddings from
-        # That will be used to calculate similarity
+        # Use Node ID to create a string to generate embeddings that will be used to calculate similarity
         emb_strings: List[str] = []
         for node in nodes:
             # props: str = ', '.join([f"{p.key}: {p.value}" for p in node.properties if isinstance(p.value, str) or isinstance(p.value, int)])
@@ -225,6 +229,55 @@ RETURN DISTINCT nn;
             if self.verbose:
                 print(result)
 
+    def _upsert_matched_nodes(self, nodes: List[Dict[str, str]]):
+        '''
+        Create new nodes in the Neo4j KG from the given list of nodes
+
+        These nodes are already resolved with unique wikidata IDs so unlike _upsert_nodes,
+        this function is much simpler - a simple merge will suffice though embeddings will be created
+        and inserted with the nodes here as well
+        '''
+
+        query = """UNWIND $nodes AS nd
+MERGE (node: Node {id: nd.id})
+WITH node, nd
+CALL apoc.create.addLabels(node, [nd.type])
+CALL db.create.setNodeVectorProperty(node, 'embedding', nd.embedding)
+SET
+    node.description = nd.desc,
+    node.url = nd.url,
+    node.wiki_type = nd.wiki_type
+
+FOREACH(x in CASE WHEN node.alias IS NULL OR NOT (nd.alias IN node.alias OR nd.alias = node.id) THEN [1] END | 
+    SET node.alias = COALESCE(nn.alias,[]) + nd.alias )
+RETURN node;
+"""
+
+        # Use Node ID to create a string to generate embeddings that will be used to calculate similarity
+        emb_strings: List[str] = []
+        for node in nodes:
+            # props: str = ', '.join([f"{p.key}: {p.value}" for p in node.properties if isinstance(p.value, str) or isinstance(p.value, int)])
+            # if len(props) > 0:
+            #     emb_strings.append(f"{node.id} {{{props}}}")
+            # else:
+            emb_strings.append(node['id'])
+        embeddings: List[List[float | double]] = self._embed(emb_strings)
+        nodes = [
+            {
+                "id": node['id'],
+                "type": node['type'],
+                "desc": node.get("desc", ""),
+                "url": node.get("url", ""),
+                "wiki_type": node.get("wiki_type", ""),
+                "alias": node.get("alias", node['id']),
+                "embedding": list(embeddings[i])
+
+            }
+            for i, node in enumerate(nodes)
+        ]
+        result: List[Dict[str, Any]] = self.graph_query(query, params={"nodes": nodes})
+        if self.verbose:
+            print(result)
 
     def _upsert_rels(self, rels: List[Relationship]) -> None:
         '''
@@ -404,20 +457,23 @@ RETURN elementType, COLLECT(DISTINCT label) AS labels;"""
 
     def disambiguate_nodes(
             self, 
-            docs: List[Document], 
             nodes: List[Node],
             rels: List[Relationship]
         ) -> Tuple[List[Document], List[Node], List[Relationship]]:
 
         nnodes, nrels = self.disambiguator.run(nodes, rels)
-        return docs, nnodes, nrels
+        return nnodes, nrels
 
     def process_documents(self, docs: List[Document]):
         docs, nodes, rels = self.docs2nodes_and_rels(docs)
         
         if self.disambiguator is not None:
-            docs, nodes, rels = self.disambiguate_nodes(docs, nodes, rels)
+            nodes, rels = self.disambiguate_nodes(nodes, rels)
 
+        if self.link_nodes:
+            matched_nodes, nodes = link_nodes(nodes, self.emb_model, 0.7)
+
+        self._upsert_matched_nodes(matched_nodes)
         self._upsert_nodes(nodes)
         self._upsert_rels(rels)
         self._create_text_nodes(docs)

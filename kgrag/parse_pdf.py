@@ -206,13 +206,26 @@ class PDFParserMarkdown():
             llm: Optional[BaseLanguageModel] = None, 
             ocr_llm: Optional[BaseLanguageModel] = None
         ) -> None:
+        '''
+        Use PyMuPDF and PyMuPDF4LLM to read input PDF document and convert to markdown.
+        If the PDF contains images, it will always OCR all the images in the PDF to extract any text.
+        
+        Args:
+            pdf_path (str): String path to open file
+            pages (List[int]| int): List of page numbers (zero-indexed) to read from the PDF.
+                                    If an integer is provided, reads all pages from beginning to the provided page number.
+                                    Default=All pages
+            ocr_engine (str | OCREngine): Which OCR engine to use. There are 3 options: PYTESSERACT, RAPIDOCR & LLM. (LLM is most accurate but also most expensive, PYTESSERACT works for most cases with 70%+ accuracy)
+            llm (BaseLanguageModel): Can optionally provide an LLM to use to deduce chapter number of each page (if the input file has no table-of-contents)
+            ocr_llm (BaseLanguageModel): If ocr_engine="LLM", must provide ocr_llm (a multimodel LLM like "gpt-4o" or "gemini-1.5-flash") to perform OCR.
+        '''
         self.doc = pymupdf.Document(pdf_path)
         if pages is None:
             pages = list(range(0, len(self.doc)))
         if isinstance(pages, int):
             pages = list(range(0, pages))
         self.page_numbers = pages
-        self.doc_markdown = pymupdf4llm.to_markdown(self.doc, pages=self.page_numbers, page_chunks=True, write_images=False, force_text=True, margins=0)
+        self.doc_markdown = pymupdf4llm.to_markdown(self.doc, pages=self.page_numbers, page_chunks=True, write_images=False, force_text=True)
         self.llm: BaseLanguageModel | None = llm
         if llm:
             self.use_llm = True
@@ -231,22 +244,27 @@ class PDFParserMarkdown():
             if ocr_llm is None:
                 raise ValueError("You must provide ocr_llm if you've chosen a multimodel LLM to perform OCR")
             self.ocr_llm = ocr_llm
-        self.chapter_count = 1
+        self.chapter_count = 0
 
     def get_toc(self) -> List[List[int]]:
         return self.doc.get_toc()
         # return self.toc
 
     def extract_page_metadata(self, page_text: str) -> Dict[str, Any]:
+        page_text = '\n'.join(page_text.split('\n')[:5])
         md: Dict[str, Any] = extract_chapter(text=page_text, model=self.llm)
         # md["page_num"] = page_num
-        if md.get("chapter_title", None) is None:
+        chapter_title = md.get("chapter_title", None)
+        if  chapter_title is None or len(chapter_title.strip()) < 2:
             if len(self.pdf_data) > 0:
-                md["chapter_title"] = self.pdf_data[-1]["page_metadata"].get("chapter_title", None)
+                md["chapter_title"] = self.pdf_data[-1]["page_metadata"].get("chapter_title", "")
                 md["chapter_number"] = self.pdf_data[-1]["page_metadata"].get("chapter_number", self.chapter_count)
-        elif len(self.pdf_data) > 0:
-            md['chapter_number'] = self.chapter_count
+            else:
+                md["chapter_title"] = ""
+                md['chapter_number'] = self.chapter_count
+        else:
             self.chapter_count += 1
+            md['chapter_number'] = self.chapter_count
         return md
 
     def get_page_metadata(self, page_num: int, page_text: str, toc: list) -> Dict[str, Any]:
@@ -288,7 +306,7 @@ class PDFParserMarkdown():
                 "chapter_number": self.chapter_count
             }
         else:
-            if len(page_text.strip()) <= 5:
+            if len(page_text.strip()) <= 10:
                 # if the text is too small, there's no point trying to look for a chapter within 
                 page_metadata = {}
             else:
@@ -297,7 +315,7 @@ class PDFParserMarkdown():
             page_metadata["source"] = f"{self.filepath} Page: {page_num}"
         return page_metadata
 
-    def extract_page_info(self, page_num: int, doc_metadata: dict, toc: list = None) -> Dict[str, Any]:
+    def extract_page_info(self, ip: int, page_num: int, doc_metadata: dict, toc: list = None) -> Dict[str, Any]:
         """Extracts text and metadata from a page of a PDF document.
 
         Args:
@@ -307,7 +325,7 @@ class PDFParserMarkdown():
         page_info = {}
         page = self.doc[page_num]
         # text_content: str = page.get_text()
-        text_content: str = self.doc_markdown[page_num]['text']
+        text_content: str = self.doc_markdown[ip]['text']
         images_list: list[list] = page.get_images()
         if len(images_list) > 0:
             imgs = []
@@ -348,7 +366,7 @@ class PDFParserMarkdown():
                 text_content += '\n' + ocr_images_llm(imgs, self.ocr_llm)
         text_content = text_content.strip(' \n\t')
         page_info["text"] = text_content
-        page_info["page_metadata"] = self.get_page_metadata(page_num=page_num, page_text=text_content, toc=toc)
+        page_info["page_metadata"] = self.get_page_metadata(page_num=page_num+1, page_text=text_content, toc=toc)
         page_info["doc_metadata"] = doc_metadata
         return page_info
 
@@ -374,12 +392,12 @@ class PDFParserMarkdown():
         return doc_metadata
 
     def process_pdf_document(self) -> List[Dict[str, Any]]:
-        self.chapter_count = 1
+        self.chapter_count = 0
         self.pdf_data = []
         toc = self.get_toc()
         doc_metadata = self.get_document_metadata()
-        for page_num in self.page_numbers:
-            self.pdf_data.append(self.extract_page_info(page_num=page_num+1, doc_metadata=doc_metadata, toc=toc))
+        for i, page_num in enumerate(self.page_numbers):
+            self.pdf_data.append(self.extract_page_info(ip=i, page_num=page_num, doc_metadata=doc_metadata, toc=toc))
             
         self.doc.close()
         return self.pdf_data

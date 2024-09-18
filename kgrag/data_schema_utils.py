@@ -154,15 +154,50 @@ def relationshipTextToListOfRelationships(rels_str: List[str]) -> List[Relations
 
 
 class PageMetadata(BaseModel):
-    chapter_title: str
+    chapter_title: str = Field(description="The extracted chapter or section title, or an empty string if none found")
+
+chapter_extraction_prompt = """You are an expert text analyzer specializing in book structure and formatting. Your task is to determine if the given text represents the start of a new chapter, section, or front matter (like a foreword or preface) and extract the title if present.
+
+Instructions:
+1. Carefully examine the first 5 lines of the provided text.
+2. Look for patterns indicating a new chapter, section, or front matter, such as:
+   - Markdown headings of level 1 or 2 (e.g., "## Foreword" or "# Chapter 1")
+   - Lines containing only a number or "Chapter" followed by a number
+   - Prominent, centered text that appears to be a title
+   - All-caps or bold text that could be a title
+3. If you identify a title, extract it and remove any markdown formatting, numbers, or words like "Chapter".
+4. For front matter (like Foreword, Preface, Introduction), include these words in the extracted title.
+5. If no title is found, return an empty string.
+
+Rules:
+- The extracted title can be up to 10 words to accommodate front matter titles.
+- Ignore page numbers, headers, footers, or signatures at the end of the text.
+- Don't include subtitles or epigraphs as part of the title.
+- If the title is in markdown format, remove the markdown symbols (e.g., "#", "**") but keep the text.
+
+Output your result in the following JSON format:
+{{
+    "chapter_title": "extracted title or empty string"
+}}
+
+Text to analyze:
+{text}
+"""
 
 def extract_chapter(text: str, model):
-    parser = JsonOutputParser(pydantic_object=PageMetadata)
-    template = "Please find if the input text from the user is the first page from a new chapter. If so, extract chapter title from the input text. Otherwise, leave the answer empty.\n{format_instructions}\n{text}"
+    # parser = JsonOutputParser(pydantic_object=PageMetadata)
+    template = chapter_extraction_prompt #"Please find if the input text from the user is the first page from a new chapter. If so, extract chapter title from the input text. Otherwise, return an empty string.\nHint: Look for a heading in either of the first 3 lines of the text.\n{format_instructions}\n{text}"
     # user_message = f"""{text}"""
-    prompt = PromptTemplate.from_template(template=template, partial_variables={"format_instructions":parser.get_format_instructions()})
+    # format_instructions = parser.get_format_instructions()
+    prompt = PromptTemplate.from_template(template=template) #, partial_variables={"format_instructions":format_instructions}
 
-    chain = prompt | model | parser
+    chain = prompt | model
     
-    res = chain.invoke({"text": text})
+    res = chain.invoke({"text": text}).content
+    try:
+        res = json.loads(res)
+    except:
+        print(res)
+        res = re.findall(": *(.+)}", res, flags=re.I)[-1].strip('\n ').strip('"').strip('\n ')
+        res = {"chapter_title": res}
     return res

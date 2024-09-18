@@ -1,14 +1,36 @@
+import os
 import re
 import json
 import requests
 import itertools
 import numpy as np
 from typing import Dict, Any, List, Tuple, Optional
-import wikipedia as wd
 from kgrag.data_schema_utils import * 
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
+def camel_case_to_normal(name: str) -> str:
+    name = re.sub('(.)([A-Z][a-z]+)', r'\1 \2', name)
+    name = re.sub('  ([A-Z])', r' \1', name)
+    name = re.sub('([a-z0-9])([A-Z])', r'\1 \2', name)
+    return name
+
+def convert_case(text: str) -> str:
+    # Add space before any uppercase letter that follows a lowercase letter
+    # or a number, and before any number that follows a letter
+    pattern = re.compile(r'(?<!^)(?=[A-Z][a-z]|\d)')
+    text = pattern.sub(' ', text)
+    
+    # Add space before any uppercase letter that follows another uppercase letter
+    # and is followed by a lowercase letter
+    pattern = re.compile(r'([A-Z])([A-Z][a-z])')
+    text = pattern.sub(r'\1 \2', text)
+    
+    # Add space before any number that follows a letter
+    pattern = re.compile(r'([a-zA-Z])(\d)')
+    text = pattern.sub(r'\1 \2', text)
+    
+    return text
 
 def wikidata_fetch(params: Dict[str, str]) -> Dict[str, Any] | str:
     url = 'https://www.wikidata.org/w/api.php'
@@ -50,7 +72,7 @@ def wikidata_search(query: str) -> List[Dict[str, Any]]:
                         'id': r['id'],
                         'url': r['url'],
                         'label': r.get('label', ''),
-                        'aliases': r.get('aliases', ''),
+                        'aliases': r.get('aliases', []),
                         'description': r.get('description', ''),
                         'type': ''
                     }
@@ -58,6 +80,8 @@ def wikidata_search(query: str) -> List[Dict[str, Any]]:
             ))
             # search_results.update(set([(r['id'], r['uri'], r['label'], r['aliases'], '') for r in res['search']]))
     # After getting all the results, get their types
+    if len(search_results) == 0:
+        return []
     search_results = [json.loads(r) for r in search_results]
     search_results = {r['id']: r for r in search_results}
     ids = '|'.join(search_results.keys())
@@ -87,6 +111,8 @@ def wikidata_search(query: str) -> List[Dict[str, Any]]:
     return list(search_results.values())
 
 def wikipedia_search(query):
+    import wikipedia as wd
+
     try:
         res = wd.search(query)
         if len(res) > 0:
@@ -95,7 +121,7 @@ def wikipedia_search(query):
         return "There was an error"
     
 def calculate_cosine_similarity(sentences: list, model: SentenceTransformer):
-    # Initializing the Sentence Transformer model using BERT with mean-tokens pooling
+    
 
     # Encoding the sentences to obtain their embeddings
     sentence_embeddings = model.encode(sentences)
@@ -103,22 +129,44 @@ def calculate_cosine_similarity(sentences: list, model: SentenceTransformer):
     # Calculating the cosine similarity between the first sentence embedding and the rest of the embeddings
     # The result will be a list of similarity scores between the first sentence and each of the other sentences
     similarity_scores = cosine_similarity([sentence_embeddings[0]], sentence_embeddings[1:])
-    return similarity_scores
+    return similarity_scores.flatten()
 
-def match_entity(entities: list[Node], orig_text: str):
-    model = SentenceTransformer('bert-base-nli-mean-tokens')
+def link_nodes(entities: List[Node], model: SentenceTransformer | None = None, sim_thresh: float = 0.5)-> Tuple[List[dict], List[Node]]:
+    # Initializing the Sentence Transformer model using BERT with mean-tokens pooling
+    if model is None:
+        model = SentenceTransformer(
+            'bert-base-nli-mean-tokens',
+            cache_folder=os.environ.get("MODELS_CACHE_FOLDER", None),
+            tokenizer_kwargs={"clean_up_tokenization_spaces": False}
+        )
     matched_nodes = []
+    unmatched_nodes = []
     for entity in entities:
-        res = wikidata_search(entity["id"])
-        sentences = [orig_text]
-        sentences.extend([r['description'] for r in res])
+        res = wikidata_search(entity.id)
+        if len(res) == 0:
+            unmatched_nodes.append(entity)
+            continue
+        sentences = [f"{entity.id}, {convert_case(entity.type)}"] #[orig_text]
+        sentences.extend([f"{r['label']}, {r['aliases']}, {r['type']}, {r['description']}" for r in res])
         scores = calculate_cosine_similarity(sentences, model)
-        ind = np.argmax(scores[0])
-        dic = {"id": res[ind]["id"], "desc": res[ind]["description"], "type": entity["type"], "wiki_type": res[ind]["type"],"alias": [entity["id"]]}
-        matched_nodes.append(dic)
-    return matched_nodes
+        ind = np.argmax(scores)
+        if scores[ind] < sim_thresh:
+            unmatched_nodes.append(entity)
+            continue
+        matched_nodes.append(
+            {
+                "id": res[ind]["id"], 
+                "desc": res[ind]["description"], 
+                "type": entity.type, 
+                "wiki_type": res[ind]["type"],
+                "alias": entity.id,
+                'url': res[ind]['url']
+            }
+        )
+    return matched_nodes, unmatched_nodes
 
 if __name__ == "__main__":
+    import wikipedia as wd
     # q = "OpenAI Generative Pre-trained Transformer"
     q = "Relation Extraction"
     q = "BioNLP conference"

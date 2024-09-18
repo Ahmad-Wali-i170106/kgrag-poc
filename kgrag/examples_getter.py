@@ -19,7 +19,7 @@ class ExamplesGetter:
         
         if use_milvus:
             # TODO: Init Milvus Database API
-            pass
+            raise NotImplementedError("Haven't yet implemented `ExamplesGetter` to use Milvus")
         else:
             if self.examples is None:
                 raise ValueError("You must provide the `json_filename` when `use_milvus` is set to False")
