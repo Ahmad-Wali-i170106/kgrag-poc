@@ -18,6 +18,7 @@ You must extract information that seems most relevant to the overall subject the
 - - You are encouraged to be descriptive with the entity types.
 - - Following are some existing node/entity types that were extracted from previous samples of the same document:\n{node_types}
 ## 3. Labeling Relationships
+- A **relationship** is between two nodes which are present in the list of nodes.
 - **Relationship Type Naming Convention**: Relationship types should be written in SCREAMING_SNAKE_CASE.
 ## 5. Coreference Resolution
 - **Maintain Entity Consistency**: When extracting entities, it's vital to ensure consistency.
@@ -51,4 +52,33 @@ Do not include any text except the generated Cypher statement.
 """
 
 OCR_SYSTEM = """You are an OCR engine that is very good at extracting legible text from scanned PDF pages.
-You must be at least 90% confident that the extracted text is accurate. Ignore the text otherwise. Be especially careful with digits or numerical values and units."""
+You must be at least 90% confident that the extracted text is accurate. Ignore the text otherwise. Be especially careful with digits or numerical values and units.
+Return markdown-formatted text as output. Remember, accuracy is crucial. It's better to express uncertainty or return nothing than to make incorrect assumptions."""
+
+CHAPTER_EXTRACTION_PROMPT = """You are an expert text analyzer specializing in book structure and formatting. Your task is to determine if the given text represents the start of a new chapter, section, or front matter (like a foreword or preface) and extract the title if present.
+
+Instructions:
+1. Carefully examine the first 5 lines of the provided text.
+2. Look for patterns indicating a new chapter, section, or front matter, such as:
+   - Markdown headings of level 1 or 2 (e.g., "## Foreword" or "# Chapter 1")
+   - Lines containing only a number or "Chapter" followed by a number
+   - Prominent, centered text that appears to be a title
+   - All-caps or bold text that could be a title
+3. If you identify a title, extract it and remove any markdown formatting, numbers, or words like "Chapter".
+4. For front matter (like Foreword, Preface, Introduction), include these words in the extracted title.
+5. If no title is found, return an empty string.
+
+Rules:
+- The extracted title can be up to 10 words to accommodate front matter titles.
+- Ignore page numbers, headers, footers, or signatures at the end of the text.
+- Don't include subtitles or epigraphs as part of the title.
+- If the title is in markdown format, remove the markdown symbols (e.g., "#", "**") but keep the text.
+
+Output your result in the following JSON format:
+{{
+    "chapter_title": "extracted title or empty string"
+}}
+
+Text to analyze:
+{text}
+"""

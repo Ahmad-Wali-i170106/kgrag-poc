@@ -9,28 +9,6 @@ from kgrag.data_schema_utils import *
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
-def camel_case_to_normal(name: str) -> str:
-    name = re.sub('(.)([A-Z][a-z]+)', r'\1 \2', name)
-    name = re.sub('  ([A-Z])', r' \1', name)
-    name = re.sub('([a-z0-9])([A-Z])', r'\1 \2', name)
-    return name.lower()
-
-def convert_case(text: str) -> str:
-    # Add space before any uppercase letter that follows a lowercase letter
-    # or a number, and before any number that follows a letter
-    pattern = re.compile(r'(?<!^)(?=[A-Z][a-z]|\d)')
-    text = pattern.sub(' ', text)
-    
-    # Add space before any uppercase letter that follows another uppercase letter
-    # and is followed by a lowercase letter
-    pattern = re.compile(r'([A-Z])([A-Z][a-z])')
-    text = pattern.sub(r'\1 \2', text)
-    
-    # Add space before any number that follows a letter
-    pattern = re.compile(r'([a-zA-Z])(\d)')
-    text = pattern.sub(r'\1 \2', text)
-    
-    return text.lower()
 
 def wikidata_fetch(params: Dict[str, str]) -> Dict[str, Any] | str:
     url = 'https://www.wikidata.org/w/api.php'
@@ -50,7 +28,7 @@ def wikidata_search(query: str) -> List[Dict[str, Any]]:
     query_strings: List[str] = re.split(r" |_|-|\+|\*", query)
     # query_strings = [query] + query_strings
     if len(query_strings) > 2:
-        st = len(query_strings) - 3
+        st = len(query_strings) - 2
     else:
         st = 0
     query_strings = [' '.join(l) for i in range(st, len(query_strings)) for l in itertools.combinations(query_strings, i+1)]
@@ -72,7 +50,7 @@ def wikidata_search(query: str) -> List[Dict[str, Any]]:
                         'id': r['id'],
                         'url': r['url'],
                         'label': r.get('label', ''),
-                        'aliases': ', '.join(r.get('aliases', [])),
+                        'aliases': r.get('aliases', []),
                         'description': r.get('description', ''),
                         'type': ''
                     }
@@ -135,7 +113,7 @@ def calculate_cosine_similarity(sentences: list, model: SentenceTransformer):
     similarity_scores = cosine_similarity([sentence_embeddings[0]], sentence_embeddings[1:])
     return similarity_scores.flatten()
 
-def link_nodes(entities: List[Node], model: SentenceTransformer | None = None, sim_thresh: float = 0.5)-> Tuple[List[dict], List[Node]]:
+def link_nodes(entities: List[Node], model: SentenceTransformer | None = None, sim_thresh: float = 0.5, verbose: bool = False)-> Tuple[List[dict], List[Node]]:
     # Initializing the Sentence Transformer model using BERT with mean-tokens pooling
     if model is None:
         model = SentenceTransformer(
@@ -151,7 +129,7 @@ def link_nodes(entities: List[Node], model: SentenceTransformer | None = None, s
             unmatched_nodes.append(entity)
             continue
         sentences = [f"{entity.id}, {convert_case(entity.type)}"] #[orig_text]
-        sentences.extend([f"{r['label']}, {r['aliases']}, {r['type']}, {r['description']}" for r in res])
+        sentences.extend([f"{r['label']}, {', '.join(r['aliases'])}, {r['type']}, {r['description']}" for r in res])
         scores = calculate_cosine_similarity(sentences, model)
         ind = np.argmax(scores)
         if scores[ind] < sim_thresh:
@@ -164,9 +142,12 @@ def link_nodes(entities: List[Node], model: SentenceTransformer | None = None, s
                 "type": entity.type, 
                 "wiki_type": res[ind]["type"],
                 "alias": entity.id,
-                'url': res[ind]['url']
+                'url': res[ind]['url'],
+                "labels": res[ind]['aliases'] + [res[ind]['label']]
             }
         )
+        if verbose:
+            print(f"Matched Node {entity} to Wikidata entity {res[ind]}")
     return matched_nodes, unmatched_nodes
 
 if __name__ == "__main__":

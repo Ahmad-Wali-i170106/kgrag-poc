@@ -117,9 +117,12 @@ You must extract information that appears most relevant to this provided subject
         self.link_nodes = link_nodes
 
         self.__create_indexes()
+    
+    def __del__(self):
+        self._driver.close()
 
     def __create_indexes(self) -> None:
-        ftquery = """CREATE FULLTEXT INDEX IDsAndAliases IF NOT EXISTS FOR (n:Node) ON EACH [n.id, n.alias]
+        ftquery = """CREATE FULLTEXT INDEX IDsAndAliases IF NOT EXISTS FOR (n:Node) ON EACH [n.id, n.alias, n.wiki_labels]
 OPTIONS { indexConfig: {
     `fulltext.analyzer`: 'standard',
     `fulltext.eventually_consistent`:false 
@@ -190,18 +193,20 @@ CALL (nd) {
     RETURN collect(n)[0] AS n
 }
 CALL apoc.do.when(n IS NULL,
-    'CALL apoc.merge.node(["Node"], {id: $nid}) YIELD node RETURN node',
+    'CALL apoc.merge.node(["Node"], {id: $nid}) YIELD node 
+     CALL db.create.setNodeVectorProperty(node, "embedding", $embedding)
+     RETURN node',
     'RETURN $n',
-    {n: n, ntype: nd.type, nid: nd.id}
+    {n: n, ntype: nd.type, nid: nd.id, embedding: nd.embedding}
 )
 YIELD value AS nn
 WITH nd AS nd, nn.node AS nn
-CALL apoc.create.addLabels(nn, [nd.type])
-CALL db.create.setNodeVectorProperty(nn, 'embedding', nd.embedding)
-SET nn += nd.properties
-FOREACH(x in CASE WHEN nn.alias IS NULL OR NOT (nd.id IN nn.alias OR nd.id = nn.id) THEN [1] END | 
-    SET nn.alias = COALESCE(nn.alias,[]) + nd.id )
-RETURN DISTINCT nn;
+CALL apoc.create.addLabels(nn, [nd.type]) YIELD node AS nnn
+WITH nd, nnn
+SET nnn += nd.properties
+FOREACH(x in CASE WHEN nnn.alias IS NULL OR NOT (nd.id IN nnn.alias OR nd.id = nnn.id) THEN [1] END | 
+    SET nnn.alias = COALESCE(nnn.alias,[]) + nd.id )
+RETURN DISTINCT nnn;
 """
 
         # Use Node ID to create a string to generate embeddings that will be used to calculate similarity
@@ -211,7 +216,7 @@ RETURN DISTINCT nn;
             # if len(props) > 0:
             #     emb_strings.append(f"{node.id} {{{props}}}")
             # else:
-            emb_strings.append(node.id)
+            emb_strings.append(f"{node.id} {convert_case(node.type)}")
         embeddings: List[List[float | double]] = self._embed(emb_strings)
         nodes = [
             {
@@ -219,7 +224,6 @@ RETURN DISTINCT nn;
                 "type": node.type,
                 "properties": {}, #{p.key: p.value for p in node.properties},
                 "embedding": list(embeddings[i])
-
             }
             for i, node in enumerate(nodes)
         ]
@@ -235,32 +239,41 @@ RETURN DISTINCT nn;
 
         These nodes are already resolved with unique wikidata IDs so unlike _upsert_nodes,
         this function is much simpler - a simple merge will suffice though embeddings will be created
-        and inserted with the nodes here as well
+        and inserted with the nodes here as well if a new node is created
         '''
 
         query = """UNWIND $nodes AS nd
 MERGE (node: Node {id: nd.id})
-WITH node, nd
-CALL apoc.create.addLabels(node, [nd.type])
-CALL db.create.setNodeVectorProperty(node, 'embedding', nd.embedding)
-SET
-    node.description = nd.desc,
+ON CREATE SET
+    node.wiki_labels = nd.labels,
     node.url = nd.url,
+    node.description = nd.desc,
     node.wiki_type = nd.wiki_type
+FOREACH(x in CASE WHEN node.alias IS NULL OR NOT (nd.alias IN node.alias) THEN [1] END | 
+    SET node.alias = COALESCE(node.alias,[]) + nd.alias )
+WITH node, nd
+CALL apoc.create.addLabels(node, [nd.type]) YIELD node AS nn
+WITH nn, nd
+CALL apoc.do.when(nn.embedding IS NULL,
+    "CALL db.create.setNodeVectorProperty($nn, 'embedding', $nd.embedding) RETURN $nn",
+    "RETURN $nn",
+    {nn: nn, nd: nd}
+) YIELD value
 
-FOREACH(x in CASE WHEN node.alias IS NULL OR NOT (nd.alias IN node.alias OR nd.alias = node.id) THEN [1] END | 
-    SET node.alias = COALESCE(nn.alias,[]) + nd.alias )
-RETURN node;
+RETURN value.node AS nne;
 """
 
         # Use Node ID to create a string to generate embeddings that will be used to calculate similarity
         emb_strings: List[str] = []
         for node in nodes:
-            # props: str = ', '.join([f"{p.key}: {p.value}" for p in node.properties if isinstance(p.value, str) or isinstance(p.value, int)])
-            # if len(props) > 0:
-            #     emb_strings.append(f"{node.id} {{{props}}}")
-            # else:
-            emb_strings.append(node['id'])
+            s = node['alias']
+            if len(node['labels']) > 0:
+                s += ', ' + ', '.join(node['labels'])
+            if len(node['wiki_type']) > 0:
+                s += ', ' + node['wiki_type']
+            if len(node['desc']) > 0:
+                s += ', ' + node['desc']
+            emb_strings.append(s)
         embeddings: List[List[float | double]] = self._embed(emb_strings)
         nodes = [
             {
@@ -269,7 +282,8 @@ RETURN node;
                 "desc": node.get("desc", ""),
                 "url": node.get("url", ""),
                 "wiki_type": node.get("wiki_type", ""),
-                "alias": node.get("alias", node['id']),
+                "labels": node.get("labels", []),
+                "alias": node["alias"],
                 "embedding": list(embeddings[i])
 
             }
@@ -471,8 +485,11 @@ RETURN elementType, COLLECT(DISTINCT label) AS labels;"""
             nodes, rels = self.disambiguate_nodes(nodes, rels)
 
         if self.link_nodes:
-            matched_nodes, nodes = link_nodes(nodes, self.emb_model, 0.7)
-
+            matched_nodes, nodes = link_nodes(nodes, self.emb_model, 0.5)
+        
+        if self.verbose:
+            print(f"Matched Nodes:\n{matched_nodes}\n\n")
+            print(f"Unmatched Nodes:\n{nodes}\n")
         self._upsert_matched_nodes(matched_nodes)
         self._upsert_nodes(nodes)
         self._upsert_rels(rels)
