@@ -14,6 +14,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.graphs import Neo4jGraph
 
 from langchain_community.vectorstores.neo4j_vector import remove_lucene_chars
+from sentence_transformers import SentenceTransformer
 
 from kgrag.data_schema_utils import Entities
 from kgrag.prompts import CYPHER_GENERATION_SYSTEM
@@ -196,12 +197,29 @@ CALL db.index.fulltext.queryNodes(
     $search_term
 ) YIELD node AS n, score
 WHERE score > $min_score
-RETURN n.id AS n, score LIMIT $top_k;
+RETURN DISTINCT n.id AS n, score LIMIT $top_k;
+""".strip()
+
+vector_search_cypher: LiteralString = """
+CALL db.index.vector.queryNodes(
+    "IDsVectors",
+    $top_k,
+    $embedding
+) YIELD node AS n, score
+WHERE score > $min_score
+RETURN DISTINCT n.id AS n, score LIMIT $top_k;
 """.strip()
 
 class KGSearch:
     
-    def __init__(self, ent_llm: BaseLanguageModel, cypher_llm: BaseLanguageModel, cypher_examples_json: str | None = None, **kwargs):
+    def __init__(
+            self, 
+            ent_llm: BaseLanguageModel, 
+            cypher_llm: BaseLanguageModel, 
+            sim_model: SentenceTransformer | None = None,
+            cypher_examples_json: str | None = None, 
+            **kwargs
+        ):
 
         url: str = os.environ.get("NEO4J_URL", kwargs.get("neo4j_url", "bolt://localhost:7687"))
         username: str = os.environ.get("NEO4J_USERNAME", kwargs.get("neo4j_username", "neo4j"))
@@ -247,11 +265,21 @@ class KGSearch:
         self.cypher_generation_chain: Runnable = cypher_prompt | cypher_llm
 
         self.max_difference: float = kwargs.get("fulltext_search_max_difference", 2.0)
-        self.min_score: float = kwargs.get("fulltext_search_min_score", 1.0)
-        self.top_k: int = kwargs.get("fulltext_search_top_k", 10)
+        self.ft_min_score: float = kwargs.get("fulltext_search_min_score", 1.0)
+        self.ft_top_k: int = kwargs.get("fulltext_search_top_k", 10)
+        self.vec_top_k: int = kwargs.get("vector_search_top_k", 15)
+        self.vec_min_score: float = kwargs.get("vector_searchc_min_score", 0.75)
         self.max_examples: int = kwargs.get("max_cypher_fewshot_examples", 15)
-        self.example_getter = ExamplesGetter(json_filename=cypher_examples_json)
-        
+
+        if sim_model is None:
+            self.sim_model = SentenceTransformer(
+                kwargs.get("embed_model_name", 'sentence-transformers/all-MiniLM-L6-v2'), 
+                cache_folder=os.environ.get("MODELS_CACHE_FOLDER", None),
+                tokenizer_kwargs={"clean_up_tokenization_spaces": False}
+            )
+
+        self.example_getter = ExamplesGetter(sim_model=self.sim_model, json_filename=cypher_examples_json)
+
         self._include_types: List[str] = kwargs.get("include_node_types", [])
         self._exclude_types: List[str] = kwargs.get("exclude_node_types", [])
         if len(self._include_types) > 0 and len(self._exclude_types) > 0:
@@ -277,15 +305,15 @@ class KGSearch:
         full_text_query += f"{words[-1]}~3"
         return full_text_query.strip()
 
-    def retrieve_fulltext(self, entities, nresults: int = 100) -> str:
+    def retrieve_node_ids_fulltext(self, entities) -> List[str]:
         node_ids = []
         for ent in entities:
             output: List[Dict[str, str | float]] = self.graph.query(
                 fulltext_search_cypher, 
                 params={
                     "search_term": self.generate_full_text_query(ent),
-                    "min_score": self.min_score,
-                    "top_k": self.top_k
+                    "min_score": self.ft_min_score,
+                    "top_k": self.ft_top_k
                 }
             )
             for i, o in enumerate(output):
@@ -296,17 +324,21 @@ class KGSearch:
                     if diff >= self.max_difference:
                         break
                     node_ids.append(o['n'])
-        rels = self.graph.query(
-            f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{rels_query}", 
-            {"node_ids": node_ids, "limit": nresults}
+        return node_ids
+    
+    def retrieve_node_ids_vector(self, query: str) -> List[str]:
+        embedding = self.sim_model.encode(query)
+
+        output: List[Dict[str, str | float]] = self.graph.query(
+            vector_search_cypher,
+            params={
+                "embedding": embedding,
+                "min_score": self.vec_min_score,
+                "top_k": self.vec_top_k
+            }
         )
-        docs = self.graph.query(
-            f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{docs_query}", 
-            {"node_ids": node_ids, "limit": nresults}
-        )
-        rels: str = '\n'.join([rel['output_string'] for rel in rels])
-        docs: str = '\n\n'.join([f"ENTITY: {doc['entity']}\nTEXT: {doc['document_text']}\nSOURCE: {doc['document_source']}" for doc in docs])
-        return f"Nodes Relations: {rels}\nNode Documents:\n{docs}"
+        node_ids = [o['n'] for o in output]
+        return node_ids
     
     def retrieve_custom_cypher(self, query: str, nresults: int) -> str:
         examples: List[str] = self.example_getter.get_examples(query, top_k=self.max_examples)
@@ -330,16 +362,43 @@ class KGSearch:
             result = []
         return '\n'.join(result)
     
-    def retrieve(self, query: str, nresults: int = 100, use_fulltext_search: bool = True) -> str:        
-        if use_fulltext_search:
-            entities: List[str] = self.entity_chain.invoke({"question": query})
-            if entities is None:
+    def retrieve(
+            self, 
+            query: str, 
+            nresults: int = 100, 
+            use_fulltext_search: bool = True, 
+            use_vector_search: bool = False,
+            generate_cypher: bool = False,
+        ) -> str:        
+        if use_fulltext_search or use_vector_search:
+            node_ids = set({})
+            if use_fulltext_search:
+                entities: Entities = self.entity_chain.invoke({"question": query})
+                if entities is not None:
+                    entities: List[str] = entities.names
+                    if len(entities) > 0:
+                        node_ids.update(set(self.retrieve_node_ids_fulltext(entities)))
+            
+            if use_vector_search and self.sim_model is not None:
+                node_ids.update(set(self.retrieve_node_ids_vector(query)))
+            
+            if len(node_ids) == 0:
+                print("No Nodes were found using Fulltext/Vector Search",
+                      "Generating cypher to retrieve results")
                 return self.retrieve_custom_cypher(query, nresults)
-            entities = entities.names
-            if len(entities) == 0:
-                 return self.retrieve_custom_cypher(query, nresults)
-            # If I can extract entities, then use fulltext search
-            return self.retrieve_fulltext(entities,nresults)
-        else:
+
+            rels = self.graph.query(
+                f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{rels_query}", 
+                {"node_ids": list(node_ids), "limit": nresults}
+            )
+            docs = self.graph.query(
+                f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{docs_query}", 
+                {"node_ids": list(node_ids), "limit": nresults}
+            )
+            rels: str = '\n'.join([rel['output_string'] for rel in rels])
+            docs: str = '\n\n'.join([f"ENTITY: {doc['entity']}\nTEXT: {doc['document_text']}\nSOURCE: {doc['document_source']}" for doc in docs])
+            return f"Nodes Relations: {rels}\nNode Documents:\n{docs}"
+        
+        if generate_cypher:
             return self.retrieve_custom_cypher(query, nresults)
         

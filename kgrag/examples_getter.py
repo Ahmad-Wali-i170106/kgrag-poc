@@ -1,5 +1,5 @@
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 
@@ -9,16 +9,17 @@ class ExamplesGetter:
             self, 
             use_milvus: bool = False, 
             json_filename: str | None = None, 
+            sim_model: Optional[SentenceTransformer] = None,
             milvus_kwargs: dict = {}, 
             **kwargs
         ):
         
-        
-        self.sim_model = SentenceTransformer(
-            kwargs.get("embed_model_name", 'sentence-transformers/all-MiniLM-L6-v2'), 
-            cache_folder=os.environ.get("MODELS_CACHE_FOLDER", None),
-            tokenizer_kwargs={"clean_up_tokenization_spaces": False}
-        )
+        if sim_model is None:
+            self.sim_model = SentenceTransformer(
+                kwargs.get("embed_model_name", 'sentence-transformers/all-MiniLM-L6-v2'), 
+                cache_folder=os.environ.get("MODELS_CACHE_FOLDER", None),
+                tokenizer_kwargs={"clean_up_tokenization_spaces": False}
+            )
 
         # Read from the JSON filename to get the list of examples
         self.examples = None
