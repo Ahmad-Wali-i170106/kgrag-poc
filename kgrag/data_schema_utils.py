@@ -40,8 +40,7 @@ class Entities(BaseModel):
 
     names: List[str] = Field(
         ...,
-        description="All the person, organization, or business entities that "
-        "appear in the text",
+        description="All the entities that appear in the text",
     )
 
 def _format_property_key(s: str) -> str:

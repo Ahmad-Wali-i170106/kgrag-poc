@@ -1,27 +1,28 @@
 
-from typing import Any, Iterable, Literal, List, Dict, Optional, Sequence, Union
+from functools import partial
+from typing import Any, Callable, Iterable, List, Dict, Optional
 import pymupdf
-import pymupdf4llm
+
 import numpy as np
 from PIL import Image
 from langchain_core.language_models import BaseLanguageModel
-from langchain_community.document_loaders.parsers.pdf import extract_from_images_with_rapidocr
+
 
 from kgrag.data_schema_utils import extract_chapter
 
 EXCLUDED_KEYS = ["modDate", "creationDate"]
 
-from kgrag.ocr import OCREngine, ocr_images_pytesseract, ocr_images_llm
+from kgrag.ocr import OCREngine
 
 
 class PDFParser():
     def __init__(
-            self, 
-            pdf_path: str, 
-            ocr_engine: str | OCREngine = OCREngine.PYTESSERACT,
-            llm: Optional[BaseLanguageModel] = None, 
-            ocr_llm: Optional[BaseLanguageModel] = None
-        ) -> None:
+        self, 
+        pdf_path: str, 
+        ocr_engine: str | OCREngine = OCREngine.PYTESSERACT,
+        llm: Optional[BaseLanguageModel] = None, 
+        ocr_llm: Optional[BaseLanguageModel] = None
+    ) -> None:
         self.doc = pymupdf.Document(pdf_path)
         self.llm: BaseLanguageModel | None = llm
         if llm:
@@ -37,12 +38,36 @@ class PDFParser():
                       f"Assuming the default value: {OCREngine.PYTESSERACT}")
                 ocr_engine = OCREngine.PYTESSERACT
         self.ocr_engine = ocr_engine
-        self.ocr_chain = None
+        self._ocr_func: Callable
         if self.ocr_engine == OCREngine.LLM:
-            if ocr_llm is None:
-                raise ValueError("You must provide ocr_llm if you've chosen a multimodel LLM to perform OCR")
-            # self.ocr_chain = get_ocr_chain(ocr_llm)
-            self.ocr_llm = ocr_llm
+            if ocr_llm is None or not isinstance(ocr_llm, BaseLanguageModel):
+                raise ValueError("You must provide ocr_llm of type `langchain.llm.base.BaseLanguageModel` if you've chosen a multimodel LLM to perform OCR",
+                                 "Otherwise, try using another OCR engine instead: PYTESSERACT | RAPIDOCR")
+            
+            from kgrag.ocr import ocr_images_llm
+            
+            self._ocr_func = partial(ocr_images_llm(llm=ocr_llm))
+        elif self.ocr_engine == OCREngine.PYTESSERACT:
+            try:
+                import pytesseract
+            except ImportError:
+                raise Exception("You do not have pytesseract installed",
+                                "Install it using `pip install pytesseract`",
+                                "Or try using another OCR engine instead: LLM | RAPIDOCR")
+            
+            from kgrag.ocr import ocr_images_pytesseract
+
+            self._ocr_func = ocr_images_pytesseract
+        elif self.ocr_engine == OCREngine.RAPIDOCR:
+            try:
+                import rapidocr_onnxruntime
+            except ImportError:
+                raise Exception("You do not have rapidocr_onnxruntime installed",
+                                "Install it using `pip install rapidocr_onnxruntime`",
+                                "Or try using another OCR engine instead: LLM | PYTESSERACT")
+            from langchain_community.document_loaders.parsers.pdf import extract_from_images_with_rapidocr
+            
+            self._ocr_func = extract_from_images_with_rapidocr
 
     def get_toc(self) -> List[List[int]]:
         return self.doc.get_toc()
@@ -148,13 +173,7 @@ class PDFParser():
                     image_bytes = base_image['image']  # Get the image bytes
                     
                     imgs.append(image_bytes)
-            if self.ocr_engine == OCREngine.PYTESSERACT:   
-                text_content += '\n' + ocr_images_pytesseract(imgs)
-            elif self.ocr_engine == OCREngine.RAPIDOCR:
-                text_content += '\n' + extract_from_images_with_rapidocr(imgs)
-            elif self.ocr_engine == OCREngine.LLM:
-                # ocr_output = self.ocr_chain.batch([{"image_data": img} for img in imgs])
-                text_content += '\n' + ocr_images_llm(imgs, self.ocr_llm)
+            text_content += '\n' + self._ocr_func(imgs)
         text_content = text_content.strip(' \n\t')
         page_info["text"] = text_content
         page_info["page_metadata"] = self.get_page_metadata(page_num=page_num, page_text=text_content, toc=toc)
@@ -197,7 +216,7 @@ class PDFParser():
         return self.pdf_data
 
 
-class PDFParserMarkdown():
+class PDFParserMarkdown:
     def __init__(
             self, 
             pdf_path: str, 
@@ -219,6 +238,8 @@ class PDFParserMarkdown():
             llm (BaseLanguageModel): Can optionally provide an LLM to use to deduce chapter number of each page (if the input file has no table-of-contents)
             ocr_llm (BaseLanguageModel): If ocr_engine="LLM", must provide ocr_llm (a multimodel LLM like "gpt-4o" or "gemini-1.5-flash") to perform OCR.
         '''
+        import pymupdf4llm
+
         self.doc = pymupdf.Document(pdf_path)
         if pages is None:
             pages = list(range(0, len(self.doc)))
@@ -241,9 +262,33 @@ class PDFParserMarkdown():
                 ocr_engine = OCREngine.PYTESSERACT
         self.ocr_engine = ocr_engine
         if self.ocr_engine == OCREngine.LLM:
-            if ocr_llm is None:
-                raise ValueError("You must provide ocr_llm if you've chosen a multimodel LLM to perform OCR")
-            self.ocr_llm = ocr_llm
+            if ocr_llm is None or not isinstance(ocr_llm, BaseLanguageModel):
+                raise ValueError("You must provide ocr_llm of type `langchain.llm.base.BaseLanguageModel` if you've chosen a multimodel LLM to perform OCR")
+            
+            from kgrag.ocr import ocr_images_llm
+            
+            self._ocr_func = partial(ocr_images_llm(llm=ocr_llm))
+        elif self.ocr_engine == OCREngine.PYTESSERACT:
+            try:
+                import pytesseract
+            except ImportError:
+                raise Exception("You do not have pytesseract installed",
+                                "Install it using `pip install pytesseract`",
+                                "Or try using another OCR engine instead: LLM | RAPIDOCR")
+            
+            from kgrag.ocr import ocr_images_pytesseract
+
+            self._ocr_func = ocr_images_pytesseract
+        elif self.ocr_engine == OCREngine.RAPIDOCR:
+            try:
+                import rapidocr_onnxruntime
+            except ImportError:
+                raise Exception("You do not have rapidocr_onnxruntime installed",
+                                "Install it using `pip install rapidocr_onnxruntime`",
+                                "Or try using another OCR engine instead: LLM | RAPIDOCR")
+            from langchain_community.document_loaders.parsers.pdf import extract_from_images_with_rapidocr
+            
+            self._ocr_func = extract_from_images_with_rapidocr
         self.chapter_count = 0
 
     def get_toc(self) -> List[List[int]]:
@@ -357,13 +402,14 @@ class PDFParserMarkdown():
                     image_bytes = base_image['image']  # Get the image bytes
                     
                     imgs.append(image_bytes)
-            if self.ocr_engine == OCREngine.PYTESSERACT:   
-                text_content += '\n' + ocr_images_pytesseract(imgs)
-            elif self.ocr_engine == OCREngine.RAPIDOCR:
-                text_content += '\n' + extract_from_images_with_rapidocr(imgs)
-            elif self.ocr_engine == OCREngine.LLM:
-                # ocr_output = self.ocr_chain.batch([{"image_data": img} for img in imgs])
-                text_content += '\n' + ocr_images_llm(imgs, self.ocr_llm)
+            text_content += '\n' + self._ocr_func(imgs)
+            # if self.ocr_engine == OCREngine.PYTESSERACT:   
+            #     text_content += '\n' + ocr_images_pytesseract(imgs)
+            # elif self.ocr_engine == OCREngine.RAPIDOCR:
+            #     text_content += '\n' + #extract_from_images_with_rapidocr(imgs)
+            # elif self.ocr_engine == OCREngine.LLM:
+            #     # ocr_output = self.ocr_chain.batch([{"image_data": img} for img in imgs])
+            #     text_content += '\n' + ocr_images_llm(imgs, self.ocr_llm)
         text_content = text_content.strip(' \n\t')
         page_info["text"] = text_content
         page_info["page_metadata"] = self.get_page_metadata(page_num=page_num+1, page_text=text_content, toc=toc)

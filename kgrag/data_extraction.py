@@ -193,10 +193,8 @@ CALL (nd) {
     RETURN collect(n)[0] AS n
 }
 CALL apoc.do.when(n IS NULL,
-    'CALL apoc.merge.node(["Node"], {id: $nid}) YIELD node 
-     CALL db.create.setNodeVectorProperty(node, "embedding", $embedding)
-     RETURN node',
-    'RETURN $n',
+    'MERGE (node: Node {id: $nid}) WITH node CALL db.create.setNodeVectorProperty(node, "embedding", $embedding) RETURN node',
+    'RETURN $n AS node',
     {n: n, ntype: nd.type, nid: nd.id, embedding: nd.embedding}
 )
 YIELD value AS nn
@@ -485,7 +483,7 @@ RETURN elementType, COLLECT(DISTINCT label) AS labels;"""
             nodes, rels = self.disambiguate_nodes(nodes, rels)
 
         if self.link_nodes:
-            matched_nodes, nodes = link_nodes(nodes, self.emb_model, 0.5)
+            matched_nodes, nodes = link_nodes(nodes, self.emb_model, 0.5, verbose=self.verbose)
         
         if self.verbose:
             print(f"Matched Nodes:\n{matched_nodes}\n\n")

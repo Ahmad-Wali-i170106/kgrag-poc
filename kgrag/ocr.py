@@ -5,7 +5,6 @@ from typing import Union, List
 import numpy as np
 from PIL import Image, ImageFilter
 
-import pytesseract
 
 from langchain_core.runnables import Runnable
 from langchain_core.prompts import ChatPromptTemplate
@@ -20,6 +19,8 @@ class OCREngine(Enum):
     LLM = "LLM"
 
 def ocr_images_pytesseract(images: List[Union[np.ndarray | Image.Image]]) -> str:
+    import pytesseract
+
     all_text: str = ""
     for image in images:
         if isinstance(image, Image.Image):

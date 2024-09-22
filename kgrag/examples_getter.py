@@ -1,15 +1,26 @@
+import os
 from typing import List, Dict, Any
 from sklearn.metrics.pairwise import cosine_similarity
+from sentence_transformers import SentenceTransformer
 
 class ExamplesGetter:
     
-    def __init__(self, use_milvus: bool = False, json_filename: str | None = None, milvus_kwargs: Dict[str] = {}):
-        from sentence_transformers import SentenceTransformer
+    def __init__(
+            self, 
+            use_milvus: bool = False, 
+            json_filename: str | None = None, 
+            milvus_kwargs: dict = {}, 
+            **kwargs
+        ):
         
+        
+        self.sim_model = SentenceTransformer(
+            kwargs.get("embed_model_name", 'sentence-transformers/all-MiniLM-L6-v2'), 
+            cache_folder=os.environ.get("MODELS_CACHE_FOLDER", None),
+            tokenizer_kwargs={"clean_up_tokenization_spaces": False}
+        )
 
-        self.sim_model = SentenceTransformer("all-miniLM-v6-L2")
         # Read from the JSON filename to get the list of examples
-        
         self.examples = None
         if json_filename is not None:
             import json

@@ -140,6 +140,13 @@ def expand_and_sanitize(df: pd.DataFrame, include_nodes_in_rels: bool = False) -
     return df
 
 class DaiNeo4jGraph(Neo4jGraph):
+    '''
+    Modify the query method of DaiNeo4jGraph to
+    
+    1) Convert results to DataFrame with expand=False
+    2) Apply expand_and_sanitize method on df which expands neo4j.Node & neo4j.Relationship & removes embedding property
+    3) Convert the df to a list of dictionaries & return
+    '''
     def query(self, query: str, params: Dict[str, Any] = {}, include_nodes_in_rels: bool = False) -> List[Dict[str, Any]]:
         
         with self._driver.session(database=self._database) as session:
@@ -152,8 +159,6 @@ class DaiNeo4jGraph(Neo4jGraph):
                 
             except (CypherSyntaxError, CypherTypeError) as e:
                 raise ValueError(f"Generated Cypher Statement is not valid\n{e}")
-    
-
 
 rels_query: LiteralString = """
 CALL (n) {
@@ -177,12 +182,12 @@ CALL (m) {
     RETURN m.id + ": " + rtrim(tar_label_str, ', ') + " " + rtrim(tar_str, ', ') + "}" AS tar_str
 }
 WITH node_str, tar_str, r
-RETURN DISTINCT "(" + node_str + ")-[:" + r + "]->(" + tar_str + ")" AS output_string;
-LIMIT $limit""".strip()
+RETURN DISTINCT "(" + node_str + ")-[:" + r + "]->(" + tar_str + ")" AS output_string
+LIMIT $limit;""".strip()
 
 docs_query: LiteralString = """
 MATCH (n: Node)<-[:MENTIONS]-(d:DocumentPage)
-RETURN DISTINCT n.id AS entity, d.source AS document_source, d.text AS document_text
+RETURN DISTINCT n.alias AS entity, d.source AS document_source, d.text AS document_text
 LIMIT $limit""".strip()
 
 fulltext_search_cypher: LiteralString = """
@@ -206,11 +211,15 @@ class KGSearch:
             url=url, username=username, password=password, database=database,
             enhanced_schema=False, refresh_schema=True, sanitize=True
         )
+        if 'gemini-1.0' in ent_llm.model:
+            role = "human"
+        else:
+            role = "system"
 
         ent_prompt: ChatPromptTemplate = ChatPromptTemplate.from_messages(
             [
                 (
-                    "system",
+                    role,
                     "You are extracting various types of entities from the text.",
                 ),
                 (
@@ -225,7 +234,7 @@ class KGSearch:
         cypher_prompt: ChatPromptTemplate = ChatPromptTemplate.from_messages(
             [
                 (
-                    "system",
+                    role,
                     CYPHER_GENERATION_SYSTEM
                 ),
                 (
@@ -241,7 +250,7 @@ class KGSearch:
         self.min_score: float = kwargs.get("fulltext_search_min_score", 1.0)
         self.top_k: int = kwargs.get("fulltext_search_top_k", 10)
         self.max_examples: int = kwargs.get("max_cypher_fewshot_examples", 15)
-        self.example_getter = ExamplesGetter(cypher_examples_json)
+        self.example_getter = ExamplesGetter(json_filename=cypher_examples_json)
         
         self._include_types: List[str] = kwargs.get("include_node_types", [])
         self._exclude_types: List[str] = kwargs.get("exclude_node_types", [])
@@ -283,7 +292,7 @@ class KGSearch:
                 if i == 0:
                     node_ids.append(o['n'])
                 else:
-                    diff: float = o['score'] - output[i-1]['score']
+                    diff: float = output[i-1]['score'] - o['score']
                     if diff >= self.max_difference:
                         break
                     node_ids.append(o['n'])
@@ -296,7 +305,7 @@ class KGSearch:
             {"node_ids": node_ids, "limit": nresults}
         )
         rels: str = '\n'.join([rel['output_string'] for rel in rels])
-        docs: str = '\n\n'.join([f"{doc['text']}\nSOURCE: {doc['source']}" for doc in docs])
+        docs: str = '\n\n'.join([f"ENTITY: {doc['entity']}\nTEXT: {doc['document_text']}\nSOURCE: {doc['document_source']}" for doc in docs])
         return f"Nodes Relations: {rels}\nNode Documents:\n{docs}"
     
     def retrieve_custom_cypher(self, query: str, nresults: int) -> str:
@@ -323,7 +332,10 @@ class KGSearch:
     
     def retrieve(self, query: str, nresults: int = 100, use_fulltext_search: bool = True) -> str:        
         if use_fulltext_search:
-            entities: List[str] = self.entity_chain.invoke({"question": query}).names
+            entities: List[str] = self.entity_chain.invoke({"question": query})
+            if entities is None:
+                return self.retrieve_custom_cypher(query, nresults)
+            entities = entities.names
             if len(entities) == 0:
                  return self.retrieve_custom_cypher(query, nresults)
             # If I can extract entities, then use fulltext search

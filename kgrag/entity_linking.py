@@ -2,170 +2,149 @@ import os
 import re
 import json
 import requests
-import itertools
-import numpy as np
 from typing import Dict, Any, List, Tuple, Optional
-from kgrag.data_schema_utils import * 
+from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
+from kgrag.data_schema_utils import * 
 
-def wikidata_fetch(params: Dict[str, str]) -> Dict[str, Any] | str:
-    url = 'https://www.wikidata.org/w/api.php'
+@lru_cache(maxsize=1000)
+def wikidata_fetch(url: str, params: frozenset) -> Dict[str, Any]:
     try:
-        data: requests.Response = requests.get(url, params=params)
-        if data.status_code == requests.codes.OK:
-            return data.json()
-        else:
-            print(data.status_code, data.content)
-            return "There was a problem with getting the results"
-    except:
-        return 'There was an error'
+        response = requests.get(url, params=dict(params))
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        print(f"Error fetching data: {e}")
+        return {}
 
 def wikidata_search(query: str) -> List[Dict[str, Any]]:
-    if len(query) == 0:
-        return ''
-    query_strings: List[str] = re.split(r" |_|-|\+|\*", query)
-    # query_strings = [query] + query_strings
-    if len(query_strings) > 2:
-        st = len(query_strings) - 2
-    else:
-        st = 0
-    query_strings = [' '.join(l) for i in range(st, len(query_strings)) for l in itertools.combinations(query_strings, i+1)]
-    search_results = set({})
-    for qs in query_strings:
-        params = {
-            'action': 'wbsearchentities',
-            'format': 'json',
-            'search': qs,
-            'language': 'en'
-        }
-        res: Dict[str, Any] | str = wikidata_fetch(params)
-        if isinstance(res, str):
-            continue
-        if res['success']:
-            search_results.update(set([
-                json.dumps(
-                    {
+    if not query:
+        return []
+    
+    query_strings = set(re.split(r" |_|-|\+|\*", query)) - {''}
+    query_strings.add(query)
+
+    url = 'https://www.wikidata.org/w/api.php'
+    base_params = {
+        'action': 'wbsearchentities',
+        'format': 'json',
+        'language': 'en'
+    }
+
+    search_results = set()
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_query = {executor.submit(wikidata_fetch, url, frozenset(base_params.items() | {('search', qs)}))
+                           : qs for qs in query_strings}
+        for future in as_completed(future_to_query):
+            res = future.result()
+            if res.get('success'):
+                search_results.update({
+                    json.dumps({
                         'id': r['id'],
                         'url': r['url'],
                         'label': r.get('label', ''),
                         'aliases': r.get('aliases', []),
                         'description': r.get('description', ''),
                         'type': ''
-                    }
-                ) for r in res['search']]
-            ))
-            # search_results.update(set([(r['id'], r['uri'], r['label'], r['aliases'], '') for r in res['search']]))
-    # After getting all the results, get their types
-    if len(search_results) == 0:
+                    }) for r in res['search']
+                })
+
+    if not search_results:
         return []
+
     search_results = [json.loads(r) for r in search_results]
     search_results = {r['id']: r for r in search_results}
-    ids = '|'.join(search_results.keys())
-    params = {
-        'action': 'wbgetentities',
-        'ids': ids,
-        'format': 'json',
-        'languages': 'en'
-    }
-    entities = wikidata_fetch(params)
-    if isinstance(entities, dict) and entities.get('success', False) and 'entities' in entities:
-        for id, ent in entities['entities'].items():
-            # specifically get the entity type of the returned 'entities' from the search results
-            etype_id = ent['claims'].get('P31', {})
-            if len(etype_id) > 0:
-                etype_id = etype_id[0].get('mainsnak', {}).get('datavalue', {}).get('value', {}).get('id', '')
-            if len(etype_id) > 0 and id in search_results:
-                params['ids'] = etype_id
-                d = wikidata_fetch(params)
-                try:
-                    etype = d.get('entities', {})[etype_id]['labels']['en']['value']
-                except:
-                    etype = ''
-                search_results[id]['type'] = etype
-            # search_results[id]['aliases'] = [al.get('value', '') for al in ent['aliases'].get('en', [])]
-            
+
+    # Fetch entity types in batches
+    batch_size = 50
+    all_ids = list(search_results.keys())
+    for i in range(0, len(all_ids), batch_size):
+        batch_ids = all_ids[i:i+batch_size]
+        params = {
+            'action': 'wbgetentities',
+            'ids': '|'.join(batch_ids),
+            'format': 'json',
+            'languages': 'en'
+        }
+        entities = wikidata_fetch(url, frozenset(params.items()))
+        if entities.get('success') and 'entities' in entities:
+            for id, ent in entities['entities'].items():
+                etype_id = next((claim['mainsnak']['datavalue']['value']['id'] 
+                                 for claim in ent['claims'].get('P31', [])
+                                 if 'mainsnak' in claim and 'datavalue' in claim['mainsnak']), '')
+                if etype_id:
+                    etype_params = {
+                        'action': 'wbgetentities',
+                        'ids': etype_id,
+                        'format': 'json',
+                        'languages': 'en'
+                    }
+                    etype_data = wikidata_fetch(url, frozenset(etype_params.items()))
+                    try:
+                        etype = etype_data['entities'][etype_id]['labels']['en']['value']
+                    except KeyError:
+                        etype = ''
+                    search_results[id]['type'] = etype
+
     return list(search_results.values())
 
-def wikipedia_search(query):
-    import wikipedia as wd
-
-    try:
-        res = wd.search(query)
-        if len(res) > 0:
-            return res
-    except:
-        return "There was an error"
-    
-def calculate_cosine_similarity(sentences: list, model: SentenceTransformer):
-    '''
-    TODO: Create new similarity function that combines cosine similarity with lexical similarity (levenshstein distance maybe) to improve results
-
-    DOESN'T find match for BERT with 0.7 sim_cutoff
-    '''
-
-    # Encoding the sentences to obtain their embeddings
+def calculate_cosine_similarity(sentences: List[str], model: SentenceTransformer) -> np.ndarray:
     sentence_embeddings = model.encode(sentences)
+    return cosine_similarity([sentence_embeddings[0]], sentence_embeddings[1:]).flatten()
 
-    # Calculating the cosine similarity between the first sentence embedding and the rest of the embeddings
-    # The result will be a list of similarity scores between the first sentence and each of the other sentences
-    similarity_scores = cosine_similarity([sentence_embeddings[0]], sentence_embeddings[1:])
-    return similarity_scores.flatten()
-
-def link_nodes(entities: List[Node], model: SentenceTransformer | None = None, sim_thresh: float = 0.5, verbose: bool = False)-> Tuple[List[dict], List[Node]]:
-    # Initializing the Sentence Transformer model using BERT with mean-tokens pooling
+def link_nodes(entities: List[Node], model: Optional[SentenceTransformer] = None, 
+               sim_thresh: float = 0.5, verbose: bool = False) -> Tuple[List[Dict[str, Any]], List[Node]]:
     if model is None:
         model = SentenceTransformer(
             'bert-base-nli-mean-tokens',
             cache_folder=os.environ.get("MODELS_CACHE_FOLDER", None),
             tokenizer_kwargs={"clean_up_tokenization_spaces": False}
         )
-    matched_nodes = []
-    unmatched_nodes = []
+
+    matched_nodes, unmatched_nodes = [], []
+
     for entity in entities:
         res = wikidata_search(entity.id)
-        if len(res) == 0:
+        if not res:
             unmatched_nodes.append(entity)
             continue
-        sentences = [f"{entity.id}, {convert_case(entity.type)}"] #[orig_text]
+
+        sentences = [f"{entity.id}, {entity.type}"]
         sentences.extend([f"{r['label']}, {', '.join(r['aliases'])}, {r['type']}, {r['description']}" for r in res])
+        
         scores = calculate_cosine_similarity(sentences, model)
-        ind = np.argmax(scores)
-        if scores[ind] < sim_thresh:
+        best_match_index = np.argmax(scores)
+
+        if scores[best_match_index] < sim_thresh:
             unmatched_nodes.append(entity)
-            continue
-        matched_nodes.append(
-            {
-                "id": res[ind]["id"], 
-                "desc": res[ind]["description"], 
-                "type": entity.type, 
-                "wiki_type": res[ind]["type"],
+        else:
+            best_match = res[best_match_index]
+            matched_nodes.append({
+                "id": best_match["id"],
+                "desc": best_match["description"],
+                "type": entity.type,
+                "wiki_type": best_match["type"],
                 "alias": entity.id,
-                'url': res[ind]['url'],
-                "labels": res[ind]['aliases'] + [res[ind]['label']]
-            }
-        )
-        if verbose:
-            print(f"Matched Node {entity} to Wikidata entity {res[ind]}")
+                'url': best_match['url'],
+                "labels": best_match['aliases'] + [best_match['label']]
+            })
+            if verbose:
+                print(f"Matched Node {entity} to Wikidata entity {best_match}\n")
+
     return matched_nodes, unmatched_nodes
 
 if __name__ == "__main__":
-    import wikipedia as wd
     # q = "OpenAI Generative Pre-trained Transformer"
-    q = "Relation Extraction"
-    q = "BioNLP conference"
-    q = "Pubmed"
-    q = "Pubtator NER"
+    # q = "Relation Extraction"
+    # q = "BioNLP conference"
+    # q = "Pubmed"
+    # q = "Pubtator NER"
     q = "Relation Type"
-    results = wd.search(q)
-    if len(results) > 0:
-        print(results)
-        page = wd.page(results[0], auto_suggest=False)
-        print(page.url,'\n',page.summary)
-    else:
-        results = wikidata_search(q)
-        for r in results:
-            print(r)
-            print()
-    # print(wd.search(q))
+    results = wikidata_search(q)
+    for r in results:
+        print(r)
+        print()
