@@ -18,8 +18,17 @@ print(os.getcwd())
 kg_search = KGSearch(
     ent_llm=llm,
     cypher_llm=llm,
-    cypher_examples_json="/media/wali/D_Drive/DreamAI/KGRAG_POC/kgrag/examples.json"
+    cypher_examples_json="examples.json",
+    fulltext_search_top_k=5,
+    vector_search_top_k=5,
+    vector_search_min_score=0.8
 )
 
-results = kg_search.retrieve("How does relation extraction work?")
-print(results)
+docs, rels, gen_cyph = kg_search.retrieve(
+    "How does relation extraction work?", 
+    nresults=30,
+    use_fulltext_search=True, 
+    use_vector_search=True,
+    generate_cypher=False
+)
+print(rels)

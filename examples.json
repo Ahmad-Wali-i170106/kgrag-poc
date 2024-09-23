@@ -1,11 +1,11 @@
 [
     {
         "question": "How does relation extraction work?",
-        "cypher": "CALL db.index.fulltext.query('IDsAndAliases', 'relation~ extraction~') YIELD node, score\nMATCH (node: Node)-[r]-(target)\nRETURN DISTINCT node, target, r AS relationship;"
+        "cypher": "CALL db.index.fulltext.queryNodes('IDsAndAliases', 'relation~ extraction~') YIELD node, score\nMATCH (node: Node)-[r]-(target)\nRETURN DISTINCT node, target, r AS relationship;"
     },
     {
         "question": "Describe the working of air coolers.",
-        "cypher": "CALL db.index.fulltext.query('IDsAndAliases', 'air~ coolers~') YIELD node, score\nMATCH (node)-[r]-(target)\nRETURN DISTINCT node, target, r AS relationship;"
+        "cypher": "CALL db.index.fulltext.queryNodes('IDsAndAliases', 'air~ coolers~') YIELD node, score\nMATCH (node)-[r]-(target)\nRETURN DISTINCT node, target, r AS relationship;"
     },
     {
         "question": "Summarise the technip process engineering guide",

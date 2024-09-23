@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from typing import List, Dict, Any, LiteralString, Optional, Tuple, Generator
 
 import neo4j
@@ -10,6 +11,7 @@ import pandas as pd
 from langchain_core.runnables import Runnable
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import AnyMessage
 
 from langchain_community.graphs import Neo4jGraph
 
@@ -34,8 +36,9 @@ def extract_cypher(text: str) -> str:
 
     # Find all matches in the input text
     matches = re.findall(pattern, text, re.DOTALL)
-
-    return matches[0] if matches else text
+    matches = matches[0] if matches else text
+    matches = matches = re.sub("cypher", '', matches, flags=re.I)
+    return matches.strip().strip(': ')
 
 
 def construct_schema(
@@ -161,30 +164,39 @@ class DaiNeo4jGraph(Neo4jGraph):
             except (CypherSyntaxError, CypherTypeError) as e:
                 raise ValueError(f"Generated Cypher Statement is not valid\n{e}")
 
+# rels_query: LiteralString = """
+# CALL (n) {
+#     MATCH (n: Node)-[r:!MENTIONS]->(target: Node)
+#     RETURN DISTINCT type(r) AS r, target AS m
+#     UNION
+#     MATCH (n: Node)<-[:MENTIONS]-(:DocumentPage)-[:MENTIONS]->(target: Node)
+#     RETURN DISTINCT "MENTIONED_WITH" AS r, target AS m
+# }
+# WITH n, m, r
+# CALL (n) {
+#     WITH [p IN keys(n) WHERE NOT p IN ["embedding", "id"] AND n[p] IS :: INTEGER|FLOAT|BOOLEAN|STRING|POINT | p] AS filteredProps, n
+#     WITH reduce(node_str = "{" , p in filteredProps | node_str  + toString(p) + ": " + toString(n[p]) + ", ") AS node_str, n
+#     WITH reduce(node_label_str = "", l in LABELS(n) | node_label_str + l + ", ") AS node_label_str, node_str, n
+#     RETURN n.id + ": " + rtrim(node_label_str, ', ') + " " + RTRIM(node_str, ', ') + "}" AS node_str
+# }
+# CALL (m) {
+#     WITH [p IN keys(m) WHERE NOT p IN ["embedding", "id"] AND m[p] IS :: INTEGER|FLOAT|BOOLEAN|STRING|POINT | p] AS filteredProps, m
+#     WITH reduce(tar_str = "{", p in filteredProps | tar_str  + toString(p) + ": " + toString(m[p]) + ", ") AS tar_str, m
+#     WITH reduce(tar_label_str = "", l in LABELS(m) | tar_label_str + l + ", ") AS tar_label_str, tar_str, m
+#     RETURN m.id + ": " + rtrim(tar_label_str, ', ') + " " + rtrim(tar_str, ', ') + "}" AS tar_str
+# }
+# WITH node_str, tar_str, r
+# RETURN DISTINCT "(" + node_str + ")-[:" + r + "]->(" + tar_str + ")" AS output_string
+# LIMIT $limit;""".strip()
+
 rels_query: LiteralString = """
 CALL (n) {
     MATCH (n: Node)-[r:!MENTIONS]->(target: Node)
     RETURN DISTINCT type(r) AS r, target AS m
-    UNION
-    MATCH (n: Node)<-[:MENTIONS]-(:DocumentPage)-[:MENTIONS]->(target: Node)
-    RETURN DISTINCT "MENTIONED_WITH" AS r, target AS m
 }
-WITH n, m, r
-CALL (n) {
-    WITH [p IN keys(n) WHERE NOT p IN ["embedding", "id"] AND n[p] IS :: INTEGER|FLOAT|BOOLEAN|STRING|POINT | p] AS filteredProps, n
-    WITH reduce(node_str = "{" , p in filteredProps | node_str  + toString(p) + ": " + toString(n[p]) + ", ") AS node_str, n
-    WITH reduce(node_label_str = "", l in LABELS(n) | node_label_str + l + ", ") AS node_label_str, node_str, n
-    RETURN n.id + ": " + rtrim(node_label_str, ', ') + " " + RTRIM(node_str, ', ') + "}" AS node_str
-}
-CALL (m) {
-    WITH [p IN keys(m) WHERE NOT p IN ["embedding", "id"] AND m[p] IS :: INTEGER|FLOAT|BOOLEAN|STRING|POINT | p] AS filteredProps, m
-    WITH reduce(tar_str = "{", p in filteredProps | tar_str  + toString(p) + ": " + toString(m[p]) + ", ") AS tar_str, m
-    WITH reduce(tar_label_str = "", l in LABELS(m) | tar_label_str + l + ", ") AS tar_label_str, tar_str, m
-    RETURN m.id + ": " + rtrim(tar_label_str, ', ') + " " + rtrim(tar_str, ', ') + "}" AS tar_str
-}
-WITH node_str, tar_str, r
-RETURN DISTINCT "(" + node_str + ")-[:" + r + "]->(" + tar_str + ")" AS output_string
-LIMIT $limit;""".strip()
+RETURN DISTINCT n, m, r
+LIMIT $limit;
+""".strip()
 
 docs_query: LiteralString = """
 MATCH (n: Node)<-[:MENTIONS]-(d:DocumentPage)
@@ -268,7 +280,7 @@ class KGSearch:
         self.ft_min_score: float = kwargs.get("fulltext_search_min_score", 1.0)
         self.ft_top_k: int = kwargs.get("fulltext_search_top_k", 10)
         self.vec_top_k: int = kwargs.get("vector_search_top_k", 15)
-        self.vec_min_score: float = kwargs.get("vector_searchc_min_score", 0.75)
+        self.vec_min_score: float = kwargs.get("vector_search_min_score", 0.75)
         self.max_examples: int = kwargs.get("max_cypher_fewshot_examples", 15)
 
         if sim_model is None:
@@ -340,7 +352,7 @@ class KGSearch:
         node_ids = [o['n'] for o in output]
         return node_ids
     
-    def retrieve_custom_cypher(self, query: str, nresults: int) -> str:
+    def retrieve_custom_cypher(self, query: str, nresults: int) -> List[str]:
         examples: List[str] = self.example_getter.get_examples(query, top_k=self.max_examples)
         examples: str = '\n'.join(examples)
         examples = f"""Examples: Here are a few examples of generated Cypher statements for particular questions:
@@ -348,28 +360,34 @@ class KGSearch:
         graph_schema = construct_schema(
             self.graph.get_structured_schema, self._include_types, self._exclude_types
         )
-        cypher: str = self.cypher_generation_chain.invoke(
+        cypher: str | AnyMessage = self.cypher_generation_chain.invoke(
             {
                 "schema": graph_schema,
                 "examples": examples,
                 "question": query,
             }
         )
+        if isinstance(cypher, AnyMessage):
+            cypher = cypher.content
+        
         cypher = extract_cypher(cypher)
         if cypher:
             result: List[Dict[str, Any]] = self.graph.query(cypher)[:nresults]
+            result = [json.dumps(res) for res in result]
         else:
             result = []
-        return '\n'.join(result)
+        return result
     
     def retrieve(
-            self, 
-            query: str, 
-            nresults: int = 100, 
-            use_fulltext_search: bool = True, 
-            use_vector_search: bool = False,
-            generate_cypher: bool = False,
-        ) -> str:        
+        self, 
+        query: str, 
+        nresults: int = 100, 
+        use_fulltext_search: bool = True, 
+        use_vector_search: bool = False,
+        generate_cypher: bool = False
+    ) -> Tuple[List[str], List[str], List[str]]:        
+        docs, rels, gen_cypher_results = [], [], []
+
         if use_fulltext_search or use_vector_search:
             node_ids = set({})
             if use_fulltext_search:
@@ -384,21 +402,50 @@ class KGSearch:
             
             if len(node_ids) == 0:
                 print("No Nodes were found using Fulltext/Vector Search",
-                      "Generating cypher to retrieve results")
-                return self.retrieve_custom_cypher(query, nresults)
-
-            rels = self.graph.query(
-                f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{rels_query}", 
-                {"node_ids": list(node_ids), "limit": nresults}
-            )
-            docs = self.graph.query(
-                f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{docs_query}", 
-                {"node_ids": list(node_ids), "limit": nresults}
-            )
-            rels: str = '\n'.join([rel['output_string'] for rel in rels])
-            docs: str = '\n\n'.join([f"ENTITY: {doc['entity']}\nTEXT: {doc['document_text']}\nSOURCE: {doc['document_source']}" for doc in docs])
-            return f"Nodes Relations: {rels}\nNode Documents:\n{docs}"
+                      "Generating cypher to retrieve any/all results")
+                gen_cypher_results = self.retrieve_custom_cypher(query, nresults)
+                return [], [], gen_cypher_results
+            else:
+                rels = self.graph.query(
+                    f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{rels_query}", 
+                    {"node_ids": list(node_ids), "limit": nresults},
+                    include_nodes_in_rels=True
+                )
+                docs = self.graph.query(
+                    f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{docs_query}", 
+                    {"node_ids": list(node_ids), "limit": nresults}
+                )
+                # rels: str = '\n'.join([rel['output_string'] for rel in rels])
+                rels: List[str] = [f"{rel['n']}-[:{rel[rel['r']]}]->{rel['m']}" for rel in rels]
+                docs: List[str] = [f"ENTITY: {doc['entity']}\nTEXT: {doc['document_text']}\nSOURCE: {doc['document_source']}" for doc in docs]
+            # output_string += f"Nodes Relations: {rels}\n{'='*10}\nNode Documents:\n{docs}"
         
         if generate_cypher:
-            return self.retrieve_custom_cypher(query, nresults)
+            gen_cypher_results = self.retrieve_custom_cypher(query, nresults)
+            # output_string += '\n' + self.retrieve_custom_cypher(query, nresults)
         
+        return rels, docs, gen_cypher_results
+    
+    def retrieve_as_string(
+        self,
+        query: str, 
+        nresults: int = 100, 
+        use_fulltext_search: bool = True, 
+        use_vector_search: bool = False,
+        generate_cypher: bool = False
+    ) -> str:
+        rels, docs, gen_cypher_results = self.retrieve(
+            query, 
+            nresults, 
+            use_fulltext_search, 
+            use_vector_search,
+            generate_cypher
+        )
+
+        output_string = ""
+        if len(rels) > 0:
+            output_string += f"Nodes Relations: {'\n'.join(rels)}"
+        if len(docs) > 0:
+            output_string += f"\n\nNode Documents: {'\n=====\n'.join(docs)}"
+        if len(gen_cypher_results) > 0:
+            output_string += f"\n\nOther Results: {'\n'.join(gen_cypher_results)}"

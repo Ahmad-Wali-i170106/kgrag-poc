@@ -14,12 +14,14 @@ class ExamplesGetter:
             **kwargs
         ):
         
-        if sim_model is None:
+        self.sim_model = sim_model
+        if self.sim_model is None:
             self.sim_model = SentenceTransformer(
                 kwargs.get("embed_model_name", 'sentence-transformers/all-MiniLM-L6-v2'), 
                 cache_folder=os.environ.get("MODELS_CACHE_FOLDER", None),
                 tokenizer_kwargs={"clean_up_tokenization_spaces": False}
             )
+
 
         # Read from the JSON filename to get the list of examples
         self.examples = None
@@ -41,16 +43,16 @@ class ExamplesGetter:
     @staticmethod
     def format_example(example: Dict[str, str]) -> str:
         return f"""# QUESTION: {example['question']}
-CYPHER: {example['cypher']}
+CYPHER: ```{example['cypher']}```
 """
     
     def get_examples(self, query: str, top_k: int = 20, sim_cutoff: float = 0.5) -> List[str]:
         if self.examples is not None:
             similarities = cosine_similarity(self.sim_model.encode([query]), self._embeddings).flatten()
             examples = [(self.examples[idx], sim) for idx, sim in enumerate(similarities) if sim >= sim_cutoff]
-            examples = sorted(similarities, key=lambda x: x[1], reverse=True)
+            examples = sorted(examples, key=lambda x: x[1], reverse=True)
             print(examples)
-            return [self.format_example(ex) for ex, score in similarities][:top_k]
+            return [self.format_example(ex) for ex, score in examples][:top_k]
         else:
             # TODO: Query Milvus and return `top_k` similar examples
             return []
