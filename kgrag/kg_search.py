@@ -416,7 +416,7 @@ class KGSearch:
                     {"node_ids": list(node_ids), "limit": nresults}
                 )
                 # rels: str = '\n'.join([rel['output_string'] for rel in rels])
-                rels: List[str] = [f"{rel['n']}-[:{rel[rel['r']]}]->{rel['m']}" for rel in rels]
+                rels: List[str] = [f"({rel['n']})-[:{rel['r']}]->({rel['m']})" for rel in rels]
                 docs: List[str] = [f"ENTITY: {doc['entity']}\nTEXT: {doc['document_text']}\nSOURCE: {doc['document_source']}" for doc in docs]
             # output_string += f"Nodes Relations: {rels}\n{'='*10}\nNode Documents:\n{docs}"
         
@@ -444,8 +444,10 @@ class KGSearch:
 
         output_string = ""
         if len(rels) > 0:
-            output_string += f"Nodes Relations: {'\n'.join(rels)}"
+            output_string += f"Nodes Relations:-\n{'\n'.join(rels)}"
         if len(docs) > 0:
-            output_string += f"\n\nNode Documents: {'\n=====\n'.join(docs)}"
+            output_string += f"\n\nNode Documents:-\n{'\n=====\n'.join(docs)}"
         if len(gen_cypher_results) > 0:
-            output_string += f"\n\nOther Results: {'\n'.join(gen_cypher_results)}"
+            output_string += f"\n\nOther Results:-\n{'\n'.join(gen_cypher_results)}"
+        
+        return output_string
