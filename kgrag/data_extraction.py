@@ -27,6 +27,12 @@ def chunks(lst: List, n: int) -> Generator[list, Any, None]:
     for i in range(0, len(lst), n):
         yield lst[i:i + n]
 
+def escape_lucene_special_characters(text) -> str:
+    # List of special characters in Lucene query syntax
+    special_chars = r'[+\-!(){}[\]^"~*?:\\/]'
+    
+    # Function to add a backslash before each special character
+    return re.sub(special_chars, r'\\\g<0>', text)
 
 
 def get_extraction_chain(llm: BaseLanguageModel) -> RunnableSerializable[Dict, Dict | BaseModel]:
@@ -253,8 +259,8 @@ WITH node, nd
 CALL apoc.create.addLabels(node, [nd.type]) YIELD node AS nn
 WITH nn, nd
 CALL apoc.do.when(nn.embedding IS NULL,
-    "CALL db.create.setNodeVectorProperty($nn, 'embedding', $nd.embedding) RETURN $nn",
-    "RETURN $nn",
+    "CALL db.create.setNodeVectorProperty($nn, 'embedding', $nd.embedding) RETURN $nn AS ndde",
+    "RETURN $nn AS node",
     {nn: nn, nd: nd}
 ) YIELD value
 
@@ -295,26 +301,28 @@ RETURN value.node AS nne;
         '''
         Creates new relationships between existing nodes in the KG
         '''
-        query = """UNWIND $rels AS r
+        query = """
+UNWIND $rels AS r
 CALL (r) {
-    CALL db.index.fulltext.queryNodes('IDsAndAliases', r.start_node_id) YIELD node, score
+    CALL db.index.fulltext.queryNodes("IDsAndAliases", apoc.text.replace(r.start_node_id, '([+\\-!(){}\\[\\]^"~*?:\\\\/])', '\\\\$1')) YIELD node, score
     WHERE score > $similarity_threshold
     RETURN node AS start_node LIMIT 1
 }
 CALL (r) {
-    CALL db.index.fulltext.queryNodes('IDsAndAliases', r.end_node_id) YIELD node, score
+    CALL db.index.fulltext.queryNodes("IDsAndAliases", apoc.text.replace(r.end_node_id, '([+\\-!(){}\\[\\]^"~*?:\\\\/])', '\\\\$1')) YIELD node, score
     WHERE score > $similarity_threshold
     RETURN node AS end_node LIMIT 1
 }
 WITH r, start_node, end_node
 WHERE start_node <> end_node
 CALL apoc.merge.relationship(start_node, r.type, r.properties, {}, end_node, {}) YIELD rel
-RETURN DISTINCT start_node{.id,.alias}, rel, end_node{.id, .alias};"""
+RETURN DISTINCT start_node{.id,.alias}, rel, end_node{.id, .alias};
+""".strip()
 
         rels = [
             {
-                "start_node_id": ' '.join([r.strip() for r in rel.start_node_id.split(' ') if len(r.strip()) > 0]),
-                "end_node_id": ' '.join([r.strip() for r in rel.end_node_id.split(' ') if len(r.strip()) > 0]),
+                "start_node_id": escape_lucene_special_characters(rel.start_node_id.strip(' \n')),
+                "end_node_id": escape_lucene_special_characters(rel.end_node_id.strip(' \n')),
                 "type": rel.type,
                 "properties": {} #{p.key: p.value for p in rel.properties}
             }
@@ -350,7 +358,7 @@ RETURN DISTINCT d.source, node.alias"""
             mentions: List[str] = doc.metadata.pop("mentions", [])
             mentions = [
                 {
-                    "id": ' '.join([f"{mid}" for mid in m.split('::')[0].strip().split(' ')]), 
+                    "id": escape_lucene_special_characters(m.split('::')[0].strip()), 
                     "type": m.split('::')[-1].strip() if len(m.split('::')) > 1 else "Node"
                 }
                 for m in mentions
