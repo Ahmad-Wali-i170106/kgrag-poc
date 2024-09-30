@@ -10,7 +10,7 @@ from itertools import groupby
 from kgrag.data_schema_utils import (
     Node,
     Relationship,
-    # Property,
+    Property,
     nodesTextToListOfNodes,
     relationshipTextToListOfRelationships,
 )
@@ -72,7 +72,7 @@ class DataDisambiguation:
             {
                 'name': node.id,
                 'label': node.type,
-                'properties': {} #{p.key: p.value for p in node.properties}
+                'properties': {p.key: p.value for p in node.properties} | {"definition": node.definition, "aliases": ','.join(node.aliases)}
             }
             for node in nodes
         ]
@@ -81,7 +81,7 @@ class DataDisambiguation:
                 "start": rel.start_node_id,
                 "end": rel.end_node_id,
                 "type": rel.type,
-                "properties": {} #{p.key: p.value for p in rel.properties}
+                "properties": {p.key: p.value for p in rel.properties} | {"context": rel.context}
             }
             for  rel in relationships
         ]
@@ -99,11 +99,16 @@ class DataDisambiguation:
             disString: str = ""
             nodes_in_group = list(group[1])
             if len(nodes_in_group) == 1:
+                props: dict = nodes_in_group[0]['properties']
+                definition = props.pop('definition', '')
+                aliases = props.pop('aliases', '').split(',')
                 new_nodes.append(
                     Node(
                         id=nodes_in_group[0]['name'], 
                         type=nodes_in_group[0]['label'],
-                        # properties=[Property(key=k, value=v) for k, v in nodes_in_group[0]['properties'].items()]
+                        properties=[Property(key=k, value=v) for k, v in props.items()],
+                        definition=definition,
+                        aliases=aliases
                     )
                 )
                 continue

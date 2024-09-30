@@ -200,7 +200,7 @@ LIMIT $limit;
 
 docs_query: LiteralString = """
 MATCH (n: Node)<-[:MENTIONS]-(d:DocumentPage)
-RETURN DISTINCT n.alias AS entity, d.source AS document_source, d.text AS document_text
+RETURN DISTINCT n AS entity, d.source AS document_source, d.text AS document_text
 LIMIT $limit""".strip()
 
 fulltext_search_cypher: LiteralString = """
@@ -409,15 +409,19 @@ class KGSearch:
                 rels = self.graph.query(
                     f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{rels_query}", 
                     {"node_ids": list(node_ids), "limit": nresults},
-                    include_nodes_in_rels=True
+                    include_nodes_in_rels=False
                 )
                 docs = self.graph.query(
                     f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{docs_query}", 
                     {"node_ids": list(node_ids), "limit": nresults}
                 )
                 # rels: str = '\n'.join([rel['output_string'] for rel in rels])
-                rels: List[str] = [f"({rel['n']})-[:{rel['r']}]->({rel['m']})" for rel in rels]
-                docs: List[str] = [f"ENTITY: {doc['entity']}\nTEXT: {doc['document_text']}\nSOURCE: {doc['document_source']}" for doc in docs]
+                if len(rels) == 0:
+                    rels: List[str] = [f"({rel['n']})-[:{rel['r']}]->({rel['m']})" for rel in rels]
+                else:
+                    rels = self.graph.query("UNWIND $node_ids AS nid\nMATCH (n: Node {id: nid})\nReturn n;")
+                    rels: List[str] = [rel['n'] for rel in rels]
+                docs: List[str] = [f"ENTITY: {doc['entity']}\nTEXT:\n{doc['document_text']}\nSOURCE: {doc['document_source']}" for doc in docs]
             # output_string += f"Nodes Relations: {rels}\n{'='*10}\nNode Documents:\n{docs}"
         
         if generate_cypher:

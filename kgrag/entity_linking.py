@@ -112,9 +112,8 @@ def link_nodes(entities: List[Node], model: Optional[SentenceTransformer] = None
         if not res:
             unmatched_nodes.append(entity)
             continue
-
-        sentences = [f"{entity.id}, {entity.type}"]
-        sentences.extend([f"{r['label']}, {', '.join(r['aliases'])}, {r['type']}, {r['description']}" for r in res])
+        sentences = [f"{entity.id}, {', '.join(entity.aliases)}, {convert_case(entity.type)}, {entity.definition}".lower()]
+        sentences.extend([f"{r['label']}, {', '.join(r['aliases'])}, {r['type']}, {r['description']}".lower() for r in res])
         
         scores = calculate_cosine_similarity(sentences, model)
         best_match_index = np.argmax(scores)
@@ -125,12 +124,14 @@ def link_nodes(entities: List[Node], model: Optional[SentenceTransformer] = None
             best_match = res[best_match_index]
             matched_nodes.append({
                 "id": best_match["id"],
+                "definition": entity.definition,
                 "desc": best_match["description"],
                 "type": entity.type,
                 "wiki_type": best_match["type"],
                 "alias": entity.id,
-                'url': best_match['url'],
-                "labels": best_match['aliases'] + [best_match['label']]
+                'url': best_match['url'].strip('/'),
+                "labels": entity.aliases + best_match['aliases'] + [best_match['label']],
+                'properties': {p.key: p.value for p in entity.properties}
             })
             if verbose:
                 print(f"Matched Node {entity} to Wikidata entity {best_match}\n")

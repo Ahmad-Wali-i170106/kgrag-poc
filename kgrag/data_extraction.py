@@ -34,6 +34,29 @@ def escape_lucene_special_characters(text) -> str:
     # Function to add a backslash before each special character
     return re.sub(special_chars, r'\\\g<0>', text)
 
+def generate_full_text_query(input_str: str) -> str:
+    """
+    Generate a full-text search query for a given input string.
+
+    This function constructs a query string suitable for a full-text search.
+    It processes the input string by splitting it into words and appending a
+    similarity threshold (~2 changed characters) to each word, then combines 
+    them using the OR operator. Useful for mapping entities from user questions
+    to database values, and allows for some misspelings.
+    """
+    
+    input_str = escape_lucene_special_characters(input_str)
+    words: List[str] = [el for el in input_str.split() if len(el) > 0]
+    if len(words) <= 1:
+        return input_str.strip()
+    full_text_query: str = ""
+    for word in words[:-1]:
+        if len(word) <= 4:
+            full_text_query += f"{word} AND "
+        else: 
+            full_text_query += f"{word}~2 AND "
+    full_text_query += f"{words[-1]}~2"
+    return full_text_query.strip()
 
 def get_extraction_chain(llm: BaseLanguageModel) -> RunnableSerializable[Dict, Dict | BaseModel]:
 
@@ -128,7 +151,7 @@ You must extract information that appears most relevant to this provided subject
         self._driver.close()
 
     def __create_indexes(self) -> None:
-        ftquery = """CREATE FULLTEXT INDEX IDsAndAliases IF NOT EXISTS FOR (n:Node) ON EACH [n.id, n.alias, n.wiki_labels]
+        ftquery = """CREATE FULLTEXT INDEX IDsAndAliases IF NOT EXISTS FOR (n:Node) ON EACH [n.id, n.alias, n.labels, n.definition]
 OPTIONS { indexConfig: {
     `fulltext.analyzer`: 'standard',
     `fulltext.eventually_consistent`:false 
@@ -178,6 +201,7 @@ OPTIONS { indexConfig: {
         elif isinstance(self.emb_model, Embeddings):
             return self.emb_model.embed_documents(sents)
 
+
     def _upsert_nodes(self, nodes: List[Node]) -> None:
         '''
         Create new nodes in the Neo4j KG from the given list of nodes
@@ -212,21 +236,26 @@ FOREACH(x in CASE WHEN nnn.alias IS NULL OR NOT (nd.id IN nnn.alias OR nd.id = n
     SET nnn.alias = COALESCE(nnn.alias,[]) + nd.id )
 RETURN DISTINCT nnn;
 """
-
+        if len(nodes) == 0:
+            if self.verbose:
+                print("No (unmatched) nodes to upsert")
+            return
         # Use Node ID to create a string to generate embeddings that will be used to calculate similarity
         emb_strings: List[str] = []
         for node in nodes:
-            # props: str = ', '.join([f"{p.key}: {p.value}" for p in node.properties if isinstance(p.value, str) or isinstance(p.value, int)])
-            # if len(props) > 0:
-            #     emb_strings.append(f"{node.id} {{{props}}}")
-            # else:
-            emb_strings.append(f"{node.id} {convert_case(node.type)}")
+            s = f"{node.id}, {convert_case(node.type).lower()}"
+            if len(node.aliases) > 0:
+                s += ', ' + ', '.join(node.aliases)
+            if len(node.definition) > 0:
+                s += ', ' + node.definition
+            emb_strings.append(s.strip(', '))
+            # emb_strings.append(f"{node.id} {convert_case(node.type)} {node.definition} {node.aliases}")
         embeddings: List[List[float | double]] = self._embed(emb_strings)
         nodes = [
             {
                 "id": node.id,
                 "type": node.type,
-                "properties": {}, #{p.key: p.value for p in node.properties},
+                "properties": {p.key: p.value for p in node.properties} | {"definition": node.definition, "labels": node.aliases},
                 "embedding": list(embeddings[i])
             }
             for i, node in enumerate(nodes)
@@ -249,45 +278,54 @@ RETURN DISTINCT nnn;
         query = """UNWIND $nodes AS nd
 MERGE (node: Node {id: nd.id})
 ON CREATE SET
-    node.wiki_labels = nd.labels,
+    node.labels = nd.labels,
     node.url = nd.url,
-    node.description = nd.desc,
+    node.wiki_description = nd.desc,
+    node.definition = nd.definition,
     node.wiki_type = nd.wiki_type
+SET node += nd.properties
 FOREACH(x in CASE WHEN node.alias IS NULL OR NOT (nd.alias IN node.alias) THEN [1] END | 
     SET node.alias = COALESCE(node.alias,[]) + nd.alias )
 WITH node, nd
 CALL apoc.create.addLabels(node, [nd.type]) YIELD node AS nn
 WITH nn, nd
 CALL apoc.do.when(nn.embedding IS NULL,
-    "CALL db.create.setNodeVectorProperty($nn, 'embedding', $nd.embedding) RETURN $nn AS ndde",
+    "CALL db.create.setNodeVectorProperty($nn, 'embedding', $nd.embedding) RETURN $nn AS node",
     "RETURN $nn AS node",
     {nn: nn, nd: nd}
 ) YIELD value
-
-RETURN value.node AS nne;
+WITH value.node AS nne
+RETURN nne{.id, .alias, .labels};
 """
-
+        if len(nodes) == 0:
+            if self.verbose:
+                print("No (matched) nodes to upsert")
+            return
         # Use Node ID to create a string to generate embeddings that will be used to calculate similarity
         emb_strings: List[str] = []
         for node in nodes:
-            s = node['alias']
+            s = f"{node['alias']}, {convert_case(node['type']).lower()}"
             if len(node['labels']) > 0:
                 s += ', ' + ', '.join(node['labels'])
             if len(node['wiki_type']) > 0:
                 s += ', ' + node['wiki_type']
+            if len(node['definition']) > 0:
+                s += ', ' + node['definition']
             if len(node['desc']) > 0:
                 s += ', ' + node['desc']
-            emb_strings.append(s)
+            emb_strings.append(s.strip(', '))
         embeddings: List[List[float | double]] = self._embed(emb_strings)
         nodes = [
             {
                 "id": node['id'],
                 "type": node['type'],
                 "desc": node.get("desc", ""),
+                "definition": node.get("definition", ""),
                 "url": node.get("url", ""),
                 "wiki_type": node.get("wiki_type", ""),
                 "labels": node.get("labels", []),
                 "alias": node["alias"],
+                "properties": node.get('properties', {}),
                 "embedding": list(embeddings[i])
 
             }
@@ -304,12 +342,12 @@ RETURN value.node AS nne;
         query = """
 UNWIND $rels AS r
 CALL (r) {
-    CALL db.index.fulltext.queryNodes("IDsAndAliases", apoc.text.replace(r.start_node_id, '([+\\-!(){}\\[\\]^"~*?:\\\\/])', '\\\\$1')) YIELD node, score
+    CALL db.index.fulltext.queryNodes("IDsAndAliases", r.start_node_id) YIELD node, score
     WHERE score > $similarity_threshold
     RETURN node AS start_node LIMIT 1
 }
 CALL (r) {
-    CALL db.index.fulltext.queryNodes("IDsAndAliases", apoc.text.replace(r.end_node_id, '([+\\-!(){}\\[\\]^"~*?:\\\\/])', '\\\\$1')) YIELD node, score
+    CALL db.index.fulltext.queryNodes("IDsAndAliases", r.end_node_id) YIELD node, score
     WHERE score > $similarity_threshold
     RETURN node AS end_node LIMIT 1
 }
@@ -318,13 +356,18 @@ WHERE start_node <> end_node
 CALL apoc.merge.relationship(start_node, r.type, r.properties, {}, end_node, {}) YIELD rel
 RETURN DISTINCT start_node{.id,.alias}, rel, end_node{.id, .alias};
 """.strip()
-
+        
+        #apoc.text.replace(r.start_node_id, '([+\\-!(){}\\[\\]^"~*?:\\\\/])', '\\\\$1')
+        if len(rels) == 0:
+            if self.verbose:
+                print("No relationships to upsert")
+            return
         rels = [
             {
-                "start_node_id": escape_lucene_special_characters(rel.start_node_id.strip(' \n')),
-                "end_node_id": escape_lucene_special_characters(rel.end_node_id.strip(' \n')),
+                "start_node_id": generate_full_text_query(rel.start_node_id),
+                "end_node_id": generate_full_text_query(rel.end_node_id),
                 "type": rel.type,
-                "properties": {} #{p.key: p.value for p in rel.properties}
+                "properties": {p.key: p.value for p in rel.properties} | {"context": rel.context}
             }
             for rel in rels
         ]

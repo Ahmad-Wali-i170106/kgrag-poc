@@ -1,7 +1,7 @@
 import re
 import json
 from langchain.pydantic_v1 import Field, BaseModel
-from typing import List
+from typing import List, Optional, Dict, Any
 
 from langchain_core.prompts import PromptTemplate
 # from langchain_core.output_parsers import JsonOutputParser
@@ -16,15 +16,18 @@ class Property(BaseModel):
     value: str = Field(..., description="value")
 
 class Node(BaseModel):
-    id: str = Field(..., description="The identifying property of the node")
-    type: str = Field(..., description="The entity type / label of the node. It should be as descriptive as possible.")
-    # properties: Optional[List[Property]] = Field(None, description="List of node properties as a list of key-value pairs.")
+    id: str = Field(..., description="The identifying property of the node in Title Case")
+    type: str = Field(..., description="The entity type / label of the node in PascalCase.")
+    properties: Optional[List[Property]] = Field(default=[], description="Detailed properties of the node")
+    aliases: List[str] = Field(default=[], description="Alternative names or identifiers for the entity in Title Case")
+    definition: Optional[str] = Field(None, description="A concise definition or description of the entity")
 
 class Relationship(BaseModel):
     start_node_id: str = Field(..., description="The id of the first node in the relationship")
     end_node_id: str = Field(..., description="The id of the second node in the relationship")
-    type: str = Field(..., description="The label / type / name of the relationship. It should be specific but also timeless.")
-    # properties: Optional[List[Property]] = Field(None, description="List of relationship properties as a list of key-value pairs.")
+    type: str = Field(..., description="TThe specific, descriptive label of the relationship in SCREAMING_SNAKE_CASE")
+    properties: List[Property] = Field(default=[], description="Detailed properties of the relationship")
+    context: Optional[str] = Field(None, description="Additional contextual information about the relationship")
         
 class KnowledgeGraph(BaseModel):
     """Generate a knowledge graph with entities and relationships."""
@@ -46,7 +49,7 @@ class Entities(BaseModel):
 def _format_property_key(s: str) -> str:
     s = re.sub(r"'|\"|`|\?|%|\$|#|@|\!|\(|\)|\&|\*|\+|\{|\}|\[|\]","", s, flags=re.I)
     words = s.split(' ')
-    if words:
+    if len(words) <= 1:
         return s
     first_word = words[0].lower()
     capitalized_words = [word.capitalize() for word in words[1:]]
@@ -55,9 +58,11 @@ def _format_property_key(s: str) -> str:
 def format_nodes(nodes: List[Node]) -> List[Node]:
     return [
         Node(
-            id = n.id if isinstance(n.id, str) else n.id,
+            id = convert_case(n.id) if isinstance(n.id, str) else n.id,
             type = ''.join([t[0].upper()+t[1:] for t in re.split( r" |_", n.type)]).replace(' ','').replace('_',''),
-            # properties = [Property(key=_format_property_key(p.key), value=p.value) for p in n.properties if p.key.lower() != 'type'] if n.properties is not None else []
+            properties = [Property(key=_format_property_key(p.key), value=p.value) for p in n.properties if p.key.lower() != 'type'] if n.properties is not None else [],
+            definition=n.definition if n.definition is not None else "",
+            aliases=[convert_case(a) for a in n.aliases] if n.aliases is not None else []
         )
         for n in nodes
     ]
@@ -65,10 +70,11 @@ def format_nodes(nodes: List[Node]) -> List[Node]:
 def format_rels(rels: List[Relationship]) -> List[Relationship]:
     return [
         Relationship(
-            start_node_id = r.start_node_id if isinstance(r.start_node_id, str) else r.start_node_id,
-            end_node_id = r.end_node_id if isinstance(r.end_node_id, str) else r.start_node_id,
+            start_node_id = convert_case(r.start_node_id) if isinstance(r.start_node_id, str) else r.start_node_id,
+            end_node_id = convert_case(r.end_node_id) if isinstance(r.end_node_id, str) else r.start_node_id,
             type = '_'.join(r.type.upper().split(' ')).replace("'", '').replace('`','').replace("%",''),
-            # properties = [Property(key=_format_property_key(p.key), value=p.value) for p in r.properties if p.key.lower() != 'type'] if r.properties is not None else []
+            properties = [Property(key=_format_property_key(p.key), value=p.value) for p in r.properties if p.key.lower() != 'type'] if r.properties is not None else [],
+            context = r.context if r.context is not None else ""
         )
         for r in rels
     ]
@@ -85,13 +91,21 @@ def merge_nodes(nodes: List[Node]) -> Node:
     
     Returns: A single Node object created by merging all the nodes
     '''
-    # props: List[Property] = []
-    # for node in nodes:
-    #     props.extend([
-    #         p for p in node.properties
-    #         if not p in props
-    #     ])
-    return Node(id=nodes[0].id, type=nodes[0].type) #, properties=props)
+    props: List[Property] = []
+    definition = ""
+    aliases = set([])
+    max_def_len = -1
+    for node in nodes:
+        props.extend([
+            p for p in node.properties
+            if not p in props
+        ])
+        if len(node.definition) >= max_def_len:
+            # Pick the longest definition (an inaccurate assumption: longest description=most descriptive definition)
+            definition = node.definition
+            max_def_len = len(node.definition)
+        aliases.update(set(node.aliases))
+    return Node(id=nodes[0].id, type=nodes[0].type, properties=props, definition=definition, aliases=aliases)
 
 
 def nodesTextToListOfNodes(nodes_str: List[str]) -> List[Node]:
@@ -103,21 +117,26 @@ def nodesTextToListOfNodes(nodes_str: List[str]) -> List[Node]:
 
         name: str = nodeList[0].strip().replace('"', "")
         label: str = nodeList[1].strip().replace('"', "")
-        # properties: re.Match | None = re.search(jsonRegex, node)
-        # if properties is None:
-        #     properties = "{}"
-        # else:
-        #     properties = properties.group(0).replace("True", "true")
-        # try:
-        #     properties: Dict[str, Any] = json.loads(properties)
-        #     properties = [
-        #         Property(key=k, value=v) for k, v in properties.items()
-        #     ]
-        # except Exception as e:
-        #     print(e)
-        #     properties = []
+        properties: re.Match | None = re.search(jsonRegex, node)
+        if properties is None:
+            properties = "{}"
+        else:
+            properties = properties.group(0).replace("True", "true")
+        try:
+            properties: Dict[str, Any] = json.loads(properties)
+            definition: str = properties.pop("definition", "")
+            aliases: List[str] = properties.pop("aliases", "").split(',')
+            properties = [
+                Property(key=k, value=v) for k, v in properties.items()
+            ]
+            
+        except Exception as e:
+            print(e)
+            properties = []
+            definition = ""
+            aliases = []
         nodes.append(
-            Node(id=name, type=label) #, properties=properties)
+            Node(id=name, type=label, properties=properties, definition=definition, aliases=aliases)
         )
     return nodes
 
@@ -131,21 +150,23 @@ def relationshipTextToListOfRelationships(rels_str: List[str]) -> List[Relations
         end: str = relationList[2].strip().replace('"', "")
         type: str = relationList[1].strip().replace('"', "")
 
-        # properties: re.Match[str] | None = re.search(jsonRegex, relation)
-        # if properties is None:
-        #     properties = "{}"
-        # else:
-        #     properties = properties.group(0).replace("True", "true")
-        # try:
-        #     properties = json.loads(properties)
-        #     properties = [
-        #         Property(key=k, value=v) for k, v in properties.items()
-        #     ]
-        # except:
-        #     properties = []
+        properties: re.Match[str] | None = re.search(jsonRegex, relation)
+        if properties is None:
+            properties = "{}"
+        else:
+            properties = properties.group(0).replace("True", "true")
+        try:
+            properties = json.loads(properties)
+            context = properties.pop("context", "")
+            properties = [
+                Property(key=k, value=v) for k, v in properties.items()
+            ]
+        except:
+            context = ""
+            properties = []
         rels.append(
-            Relationship(start_node_id=start, end_node_id=end, type=type) #, properties=properties)
-        ) #{"start": start, "end": end, "type": type, "properties": properties}
+            Relationship(start_node_id=start, end_node_id=end, type=type, properties=properties, context=context)
+        )
     return rels
 
 ##############################
@@ -197,5 +218,5 @@ def convert_case(text: str) -> str:
     # Add space before any number that follows a letter
     pattern = re.compile(r'([a-zA-Z])(\d)')
     text = pattern.sub(r'\1 \2', text)
-    
-    return text.lower()
+    text = re.sub(r" {2,}", " ", text)
+    return text
