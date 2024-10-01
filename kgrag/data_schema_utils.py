@@ -197,6 +197,8 @@ def extract_chapter(text: str, model):
         res = {"chapter_title": res}
     return res
 
+def is_number(n: str) -> bool:
+    return all([ni in "1234567890" for ni in n])
 
 def camel_case_to_normal(name: str) -> str:
     name = re.sub('(.)([A-Z][a-z]+)', r'\1 \2', name)
@@ -207,6 +209,8 @@ def camel_case_to_normal(name: str) -> str:
 def convert_case(text: str) -> str:
     # Add space before any uppercase letter that follows a lowercase letter
     # or a number, and before any number that follows a letter
+    if is_number(text):
+        return text
     pattern = re.compile(r'(?<!^)(?=[A-Z][a-z]|\d)')
     text = pattern.sub(' ', text)
     

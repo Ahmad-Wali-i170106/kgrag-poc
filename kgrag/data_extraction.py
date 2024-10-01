@@ -45,7 +45,7 @@ def generate_full_text_query(input_str: str) -> str:
     to database values, and allows for some misspelings.
     """
     
-    input_str = escape_lucene_special_characters(input_str)
+    input_str = escape_lucene_special_characters(input_str.lower())
     words: List[str] = [el for el in input_str.split() if len(el) > 0]
     if len(words) <= 1:
         return input_str.strip()
@@ -151,7 +151,7 @@ You must extract information that appears most relevant to this provided subject
         self._driver.close()
 
     def __create_indexes(self) -> None:
-        ftquery = """CREATE FULLTEXT INDEX IDsAndAliases IF NOT EXISTS FOR (n:Node) ON EACH [n.id, n.alias, n.labels, n.definition]
+        ftquery = """CREATE FULLTEXT INDEX IDsAndAliases IF NOT EXISTS FOR (n:Node) ON EACH [n.id, n.alias, n.labels]
 OPTIONS { indexConfig: {
     `fulltext.analyzer`: 'standard',
     `fulltext.eventually_consistent`:false 
@@ -394,7 +394,7 @@ CALL (mention) {
 }
 
 MERGE (d)-[:MENTIONS]-(node)
-RETURN DISTINCT d.source, node.alias"""
+RETURN DISTINCT d.source, collect(node.alias) AS nodes"""
 
         for doc in docs:
             # Prepare the entity mentions in this particular doc

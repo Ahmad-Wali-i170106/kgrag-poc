@@ -300,21 +300,28 @@ class KGSearch:
             self._exclude_types = []
 
     @staticmethod
-    def generate_full_text_query(input: str) -> str:
+    def generate_full_text_query(input_str: str) -> str:
         """
         Generate a full-text search query for a given input string.
 
         This function constructs a query string suitable for a full-text search.
         It processes the input string by splitting it into words and appending a
-        similarity threshold (~3 changed characters) to each word, then combines 
+        similarity threshold (~2 changed characters) to each word, then combines 
         them using the OR operator. Useful for mapping entities from user questions
         to database values, and allows for some misspelings.
         """
+        
+        input_str = remove_lucene_chars(input_str.lower())
+        words: List[str] = [el for el in input_str.split() if len(el) > 0]
+        if len(words) <= 1:
+            return input_str.strip()
         full_text_query: str = ""
-        words: List[str] = [el for el in remove_lucene_chars(input).split() if el]
         for word in words[:-1]:
-            full_text_query += f"{word}~3 OR "
-        full_text_query += f"{words[-1]}~3"
+            if len(word) <= 4:
+                full_text_query += f"{word} AND "
+            else: 
+                full_text_query += f"{word}~2 AND "
+        full_text_query += f"{words[-1]}~2"
         return full_text_query.strip()
 
     def retrieve_node_ids_fulltext(self, entities) -> List[str]:
