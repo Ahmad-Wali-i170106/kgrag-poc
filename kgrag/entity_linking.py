@@ -24,9 +24,12 @@ def wikidata_fetch(url: str, params: frozenset) -> Dict[str, Any]:
 def wikidata_search(query: str) -> List[Dict[str, Any]]:
     if not query:
         return []
-    
-    query_strings = set(re.split(r" |_|-|\+|\*", query)) - {''}
+    # query = query.replace('(', '').replace(')', '')
+    query_strings = set(re.split(r" |_|-|\+|\*|\(|\)|\[|\]", query)) - {''}
     query_strings.add(query)
+    if ' ' in query:
+        query_strings.add(query.replace(' ',''))
+
 
     url = 'https://www.wikidata.org/w/api.php'
     base_params = {
@@ -112,7 +115,16 @@ def link_nodes(entities: List[Node], model: Optional[SentenceTransformer] = None
         if not res:
             unmatched_nodes.append(entity)
             continue
-        sentences = [f"{entity.id}, {', '.join(entity.aliases)}, {convert_case(entity.type)}, {entity.definition}".lower()]
+        if not ' ' in entity.id:
+            tcase_id = convert_case(entity.id)
+            if tcase_id != entity.id:
+                eid = f"{entity.id}/{tcase_id}"
+            else:
+                eid = entity.id
+        else:
+            eid = f"{entity.id.replace(' ', '')}/{entity.id}"
+
+        sentences = [f"{eid}, {', '.join(entity.aliases)}, {convert_case(entity.type)}, {entity.definition}"]
         sentences.extend([f"{r['label']}, {', '.join(r['aliases'])}, {r['type']}, {r['description']}".lower() for r in res])
         
         scores = calculate_cosine_similarity(sentences, model)

@@ -41,6 +41,7 @@ Adhere to the rules strictly. Non-compliance will result in termination."""
 
 # - **Type Property**: NEVER include the `type` property in the list of properties.
 
+# - Only create relationships between two existing nodes with high certainty (>80% confidence) 
 
 DATA_EXTRACTION_SYSTEM = """# Knowledge Graph Extraction for Rich Information Retrieval
 ## 1. Overview
@@ -56,12 +57,11 @@ You are an advanced algorithm designed to extract knowledge from various types o
 - **Node Types**: Use PascalCase. Be as specific and descriptive as possible to aid in Wikidata matching.
 - Include all relevant attributes of the entity in the node properties.
 - Extract and include alternative names or aliases for entities when present in the text.
-- Following are some existing node/entity types that were extracted from previous samples of the same document:\n{node_types}
+- Following are some existing node types that were extracted from previous samples of the same document:\n{node_types}
 
 ## 4. Relationship Extraction
 - Use SCREAMING_SNAKE_CASE for relationship types.
 - Create detailed, informative relationship types that clearly describe the nature of the connection.
-- Only create relationships between two existing nodes with high certainty (>90% confidence) 
 - Include directional relationships where applicable (e.g., PRECEDED_BY, FOLLOWED_BY instead of just RELATED_TO).
 
 ## 5. Contextual Information

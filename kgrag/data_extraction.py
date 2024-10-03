@@ -148,7 +148,8 @@ You must extract information that appears most relevant to this provided subject
         self.__create_indexes()
     
     def __del__(self):
-        self._driver.close()
+        if self._driver is not None:
+            self._driver.close()
 
     def __create_indexes(self) -> None:
         ftquery = """CREATE FULLTEXT INDEX IDsAndAliases IF NOT EXISTS FOR (n:Node) ON EACH [n.id, n.alias, n.labels]
@@ -458,15 +459,17 @@ RETURN elementType, COLLECT(DISTINCT label) AS labels;"""
         return set(node_labels), set(rel_labels) 
 
     
-    def docs2nodes_and_rels(self, docs: List[Document]) -> Tuple[List[Document], List[Node], List[Relationship]]:
+    def docs2nodes_and_rels(self, docs: List[Document], use_existing_node_types: bool) -> Tuple[List[Document], List[Node], List[Relationship]]:
         
         # Only store unique nodes and relationships - Helps later when adding to neo4j
         nodes_dict: Dict[str, list] = dict({})
         rels: list = []
         
-        ex_node_types, _ = self.__get_existing_labels()
-        # ex_node_types = set({})
+        ex_node_types = set({})
         # ex_rel_types = set({})
+        if use_existing_node_types:
+            ex_node_types, _ = self.__get_existing_labels()
+        
 
         for i, doc in enumerate(docs):
             output = None
@@ -527,14 +530,14 @@ RETURN elementType, COLLECT(DISTINCT label) AS labels;"""
         nnodes, nrels = self.disambiguator.run(nodes, rels)
         return nnodes, nrels
 
-    def process_documents(self, docs: List[Document]):
-        docs, nodes, rels = self.docs2nodes_and_rels(docs)
+    def process_documents(self, docs: List[Document], use_existing_node_types: bool = True):
+        docs, nodes, rels = self.docs2nodes_and_rels(docs, use_existing_node_types)
         
         if self.disambiguator is not None:
             nodes, rels = self.disambiguate_nodes(nodes, rels)
 
         if self.link_nodes:
-            matched_nodes, nodes = link_nodes(nodes, self.emb_model, 0.5, verbose=self.verbose)
+            matched_nodes, nodes = link_nodes(nodes, self.emb_model, 0.6, verbose=self.verbose)
         
         if self.verbose:
             print(f"Matched Nodes:\n{matched_nodes}\n\n")

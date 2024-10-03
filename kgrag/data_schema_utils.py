@@ -58,11 +58,11 @@ def _format_property_key(s: str) -> str:
 def format_nodes(nodes: List[Node]) -> List[Node]:
     return [
         Node(
-            id = convert_case(n.id) if isinstance(n.id, str) else n.id,
+            id = convert_case(n.id) if (isinstance(n.id, str) and not ' ' in n.id) else n.id,
             type = ''.join([t[0].upper()+t[1:] for t in re.split( r" |_", n.type)]).replace(' ','').replace('_',''),
             properties = [Property(key=_format_property_key(p.key), value=p.value) for p in n.properties if p.key.lower() != 'type'] if n.properties is not None else [],
             definition=n.definition if n.definition is not None else "",
-            aliases=[convert_case(a) for a in n.aliases] if n.aliases is not None else []
+            aliases=[convert_case(a) for a in n.aliases if not ' ' in a] if n.aliases is not None else []
         )
         for n in nodes
     ]
@@ -201,26 +201,48 @@ def is_number(n: str) -> bool:
     return all([ni in "1234567890" for ni in n])
 
 def camel_case_to_normal(name: str) -> str:
+    if is_number(name):
+        return name
     name = re.sub('(.)([A-Z][a-z]+)', r'\1 \2', name)
     name = re.sub('  ([A-Z])', r' \1', name)
     name = re.sub('([a-z0-9])([A-Z])', r'\1 \2', name)
-    return name.lower()
+    return name
 
 def convert_case(text: str) -> str:
-    # Add space before any uppercase letter that follows a lowercase letter
-    # or a number, and before any number that follows a letter
+    # If the text is a number, return the string as is
+    if ' ' in text:
+        return text
     if is_number(text):
         return text
-    pattern = re.compile(r'(?<!^)(?=[A-Z][a-z]|\d)')
-    text = pattern.sub(' ', text)
     
-    # Add space before any uppercase letter that follows another uppercase letter
-    # and is followed by a lowercase letter
-    pattern = re.compile(r'([A-Z])([A-Z][a-z])')
-    text = pattern.sub(r'\1 \2', text)
+
+    # Step 1: Split the input at hyphens
+    hyphen_parts = re.split('-|_|–', text)
     
-    # Add space before any number that follows a letter
-    pattern = re.compile(r'([a-zA-Z])(\d)')
-    text = pattern.sub(r'\1 \2', text)
-    text = re.sub(r" {2,}", " ", text)
-    return text
+    # Step 2: Process each part separately
+    processed_parts = []
+    for part in hyphen_parts:
+        # Handle plural acronyms
+        if re.match(r'^[A-Z]{2,}s$', part):
+            processed_parts.append(part[:-1] + 's')
+        else:
+            # Add space before any uppercase letter that follows a lowercase letter
+            # or a number, and before any number that follows a letter
+            pattern = re.compile(r'(?<!^)(?=[A-Z][a-z]|\d)')
+            part = pattern.sub(' ', part)
+            
+            # Add space before any uppercase letter that follows another uppercase letter
+            # and is followed by a lowercase letter
+            pattern = re.compile(r'([A-Z])([A-Z][a-z])')
+            part = pattern.sub(r'\1 \2', part)
+            
+            # Add space before any number that follows a letter
+            pattern = re.compile(r'([a-zA-Z])(\d)')
+            part = pattern.sub(r'\1 \2', part)
+            
+            processed_parts.append(part.strip())
+    
+    # Step 3: Join the processed parts with spaces
+    result = '-'.join(processed_parts)
+    result = re.sub(r" {2,}", " ", result)
+    return result
