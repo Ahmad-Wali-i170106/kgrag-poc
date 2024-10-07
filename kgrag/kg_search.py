@@ -377,8 +377,15 @@ class KGSearch:
         cypher = extract_cypher(cypher)
         print(f"Following Cypher was generated:\n{cypher}")
         if cypher:
-            result: List[Dict[str, Any]] = self.graph.query(cypher)[:nresults]
-            result = [json.dumps(res) for res in result]
+            try:
+                result: List[Dict[str, Any]] = self.graph.query(cypher)[:nresults]
+                result = [json.dumps(res) for res in result]
+            except ValueError as ve:
+                print(ve)
+                result = []
+            except Exception as e:
+                print(e)
+                result = []
         else:
             result = []
         return result
