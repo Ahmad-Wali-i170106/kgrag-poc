@@ -114,9 +114,9 @@ def node_to_str(n: GraphNode) -> str:
         if nid is not None:
             break
     if nid is None:
-        node_str = f"{props} : {', '.join(list(n.labels))}"
+        node_str = f":{':'.join(list(n.labels))} {props}"
     else:
-        node_str = f"{nid}: {', '.join(list(n.labels))} {props}"
+        node_str = f"{nid}: {':'.join(list(n.labels))} {props}"
     return node_str
 
 def rel_to_str(r: GraphRelationship, include_nodes: bool = False) -> str:
@@ -423,10 +423,10 @@ class KGSearch:
                     {"node_ids": list(node_ids), "limit": nresults}
                 )
                 # rels: str = '\n'.join([rel['output_string'] for rel in rels])
-                if len(rels) == 0:
+                if len(rels) > 0:
                     rels: List[str] = [f"({rel['n']})-[:{rel['r']}]->({rel['m']})" for rel in rels]
                 else:
-                    rels = self.graph.query("UNWIND $node_ids AS nid\nMATCH (n: Node {id: nid})\nReturn n;")
+                    rels = self.graph.query("UNWIND $node_ids AS nid\nMATCH (n: Node {id: nid})\nReturn n;", {"node_id": list(node_ids)})
                     rels: List[str] = [rel['n'] for rel in rels]
                 docs: List[str] = [f"ENTITY: {doc['entity']}\nTEXT:\n{doc['document_text']}\nSOURCE: {doc['document_source']}" for doc in docs]
             # output_string += f"Nodes Relations: {rels}\n{'='*10}\nNode Documents:\n{docs}"
