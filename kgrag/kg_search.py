@@ -190,17 +190,14 @@ class DaiNeo4jGraph(Neo4jGraph):
 # LIMIT $limit;""".strip()
 
 rels_query: LiteralString = """
-CALL (n) {
-    MATCH (n: Node)-[r:!MENTIONS]->(target: Node)
-    RETURN DISTINCT type(r) AS r, target AS m
-}
-RETURN DISTINCT n, m, r
+MATCH (n: Node)-[r:!MENTIONS]-(m: Node)
+RETURN DISTINCT n, m, type(r) AS r
 LIMIT $limit;
 """.strip()
 
 docs_query: LiteralString = """
 MATCH (n: Node)<-[:MENTIONS]-(d:DocumentPage)
-RETURN DISTINCT n AS entity, d.source AS document_source, d.text AS document_text
+RETURN DISTINCT d.source AS document_source, d.text AS document_text
 LIMIT $limit""".strip()
 
 fulltext_search_cypher: LiteralString = """
@@ -378,6 +375,7 @@ class KGSearch:
             cypher = cypher.content
         
         cypher = extract_cypher(cypher)
+        print(f"Following Cypher was generated:\n{cypher}")
         if cypher:
             result: List[Dict[str, Any]] = self.graph.query(cypher)[:nresults]
             result = [json.dumps(res) for res in result]
@@ -428,7 +426,7 @@ class KGSearch:
                 else:
                     rels = self.graph.query("UNWIND $node_ids AS nid\nMATCH (n: Node {id: nid})\nReturn n;", {"node_id": list(node_ids)})
                     rels: List[str] = [rel['n'] for rel in rels]
-                docs: List[str] = [f"ENTITY: {doc['entity']}\nTEXT:\n{doc['document_text']}\nSOURCE: {doc['document_source']}" for doc in docs]
+                docs: List[str] = [f"{doc['document_text']}\nSOURCE: {doc['document_source']}" for doc in docs]
             # output_string += f"Nodes Relations: {rels}\n{'='*10}\nNode Documents:\n{docs}"
         
         if generate_cypher:
@@ -457,7 +455,7 @@ class KGSearch:
         if len(rels) > 0:
             output_string += f"Nodes Relations:-\n{'\n'.join(rels)}"
         if len(docs) > 0:
-            output_string += f"\n\nNode Documents:-\n{'\n=====\n'.join(docs)}"
+            output_string += f"\n\nDocuments:-\n{'\n=====\n'.join(docs)}"
         if len(gen_cypher_results) > 0:
             output_string += f"\n\nOther Results:-\n{'\n'.join(gen_cypher_results)}"
         
