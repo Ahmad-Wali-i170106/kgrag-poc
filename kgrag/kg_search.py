@@ -360,7 +360,7 @@ class KGSearch:
         return node_ids
     
     def retrieve_custom_cypher(self, query: str, nresults: int) -> List[str]:
-        examples: List[str] = self.example_getter.get_examples(query, top_k=self.max_examples)
+        examples: List[str] = self.example_getter.get_examples(query, top_k=self.max_examples, sim_cutoff=0.1)
         examples: str = '\n'.join(examples)
         examples = f"""Examples: Here are a few examples of generated Cypher statements for particular questions:
 {examples}"""
@@ -459,6 +459,6 @@ class KGSearch:
         if len(docs) > 0:
             output_string += f"\n\nNode Documents:-\n{'\n=====\n'.join(docs)}"
         if len(gen_cypher_results) > 0:
-            output_string += f"\n\nOther Results:-\n{'\n'.join(gen_cypher_results)}"
+            output_string += f"\n\nCypher Results:-\n{'\n'.join(gen_cypher_results)}"
         
-        return output_string
+        return output_string.strip()

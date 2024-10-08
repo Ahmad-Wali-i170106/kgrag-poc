@@ -13,6 +13,10 @@
     },
     {
         "question": "Summarise chapter 3 of 'leadership' by etsko schuitema",
-        "cypher": "MATCH (d: DocumentPage) WHERE d.source =~ '(?i).*leader.*' AND d.chaper_number = 3 RETURN d;"
+        "cypher": "MATCH (d: DocumentPage) WHERE d.source =~ '(?i).*leader.*' AND d.chapter_number = 3 RETURN d;"
+    },
+    {
+        "question": "Summarise chapter 7 of the C++ Programming book.",
+        "cypher": "MATCH (d: DocumentPage) WHERE d.source =~ '(?i).*C\\+\\+.*Programming.*' AND d.chapter_number = 7 RETURN d;"
     }
 ]
