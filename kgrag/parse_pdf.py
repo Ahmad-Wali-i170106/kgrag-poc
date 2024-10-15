@@ -14,6 +14,7 @@ EXCLUDED_KEYS = ["modDate", "creationDate"]
 
 from kgrag.ocr import OCREngine
 
+from loguru import logger
 
 class PDFParser():
     def __init__(
@@ -34,7 +35,7 @@ class PDFParser():
             try:
                 ocr_engine = OCREngine[ocr_engine.upper()]
             except KeyError:
-                print(f"{ocr_engine} is not a valid OCREngine. Valid values are {OCREngine._member_names_}",
+                logger.error(f"{ocr_engine} is not a valid OCREngine. Valid values are {OCREngine._member_names_}",
                       f"Assuming the default value: {OCREngine.PYTESSERACT}")
                 ocr_engine = OCREngine.PYTESSERACT
         self.ocr_engine = ocr_engine
@@ -106,7 +107,7 @@ class PDFParser():
                     else:
                         i = len(toc)
                 except Exception as e:
-                    print(e)
+                    logger.error(e)
                     continue
             page_metadata = {
                 "page": page_num,
@@ -257,7 +258,7 @@ class PDFParserMarkdown:
             try:
                 ocr_engine = OCREngine[ocr_engine.upper()]
             except KeyError:
-                print(f"{ocr_engine} is not a valid OCREngine. Valid values are {OCREngine._member_names_}",
+                logger.error(f"{ocr_engine} is not a valid OCREngine. Valid values are {OCREngine._member_names_}",
                       f"Assuming the default value: {OCREngine.PYTESSERACT}")
                 ocr_engine = OCREngine.PYTESSERACT
         self.ocr_engine = ocr_engine
@@ -336,7 +337,7 @@ class PDFParserMarkdown:
                     else:
                         i = len(toc)
                 except Exception as e:
-                    print(e)
+                    logger.error(e)
                     continue
             page_metadata = {
                 "page": page_num,

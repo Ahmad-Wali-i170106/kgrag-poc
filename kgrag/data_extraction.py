@@ -1,5 +1,5 @@
 import os
-from typing import List, Dict, Any, Optional, Tuple, Generator
+from typing import List, Dict, Any, Callable, Tuple, Generator
 
 import neo4j
 from numpy import double
@@ -17,10 +17,11 @@ from langchain_core.runnables import RunnableSerializable
 from langchain_community.graphs.neo4j_graph import value_sanitize
 
 from kgrag.data_schema_utils import * 
-from kgrag.data_disambiguation import DataDisambiguation
+
 from kgrag.entity_linking import link_nodes
 from kgrag.prompts import DATA_EXTRACTION_SYSTEM
 
+from loguru import logger
 
 def chunks(lst: List, n: int) -> Generator[list, Any, None]:
     """Yield successive n-sized chunks from lst."""
@@ -138,10 +139,12 @@ You must extract information that appears most relevant to this provided subject
         self.emb_model: SentenceTransformer | Embeddings = emb_model
 
         # self._disambiguate: bool = disambiguate_nodes
-        if disambiguate_nodes:
-            self.disambiguator = DataDisambiguation(llm=kwargs.get("disambiguate_llm", None) or llm)
-        else:
-            self.disambiguator = None
+        self.disambiguator: Callable | None = None
+        # if disambiguate_nodes:
+        #     from kgrag.data_disambiguation import DataDisambiguation
+
+        #     disambiguator = DataDisambiguation(llm=kwargs.get("disambiguate_llm", None) or llm)
+        #     self.disambiguator = disambiguator.run
         
         self.link_nodes = link_nodes
 
@@ -239,7 +242,7 @@ RETURN DISTINCT nnn;
 """
         if len(nodes) == 0:
             if self.verbose:
-                print("No (unmatched) nodes to upsert")
+                logger.info("No (unmatched) nodes to upsert")
             return
         # Use Node ID to create a string to generate embeddings that will be used to calculate similarity
         emb_strings: List[str] = []
@@ -265,7 +268,7 @@ RETURN DISTINCT nnn;
             
             result: List[Dict[str, Any]] = self.graph_query(query, params={"nodes": bnodes, "similarity_threshold": self._sim_thresh})
             if self.verbose:
-                print(result)
+                logger.info(result)
 
     def _upsert_matched_nodes(self, nodes: List[Dict[str, str]]):
         '''
@@ -300,7 +303,7 @@ RETURN nne{.id, .alias, .labels};
 """
         if len(nodes) == 0:
             if self.verbose:
-                print("No (matched) nodes to upsert")
+                logger.info("No (matched) nodes to upsert")
             return
         # Use Node ID to create a string to generate embeddings that will be used to calculate similarity
         emb_strings: List[str] = []
@@ -334,7 +337,7 @@ RETURN nne{.id, .alias, .labels};
         ]
         result: List[Dict[str, Any]] = self.graph_query(query, params={"nodes": nodes})
         if self.verbose:
-            print(result)
+            logger.info(result)
 
     def _upsert_rels(self, rels: List[Relationship]) -> None:
         '''
@@ -361,7 +364,7 @@ RETURN DISTINCT start_node{.id,.alias}, rel, end_node{.id, .alias};
         #apoc.text.replace(r.start_node_id, '([+\\-!(){}\\[\\]^"~*?:\\\\/])', '\\\\$1')
         if len(rels) == 0:
             if self.verbose:
-                print("No relationships to upsert")
+                logger.info("No relationships to upsert")
             return
         rels = [
             {
@@ -374,7 +377,7 @@ RETURN DISTINCT start_node{.id,.alias}, rel, end_node{.id, .alias};
         ]
         new_rels: List[Dict[str, Any]] = self.graph_query(query, params={"rels": rels, "similarity_threshold": self._ft_sim_thresh})
         if self.verbose:
-            print(new_rels)
+            logger.info(new_rels)
 
     def _create_text_nodes(self, docs: List[Document]) -> None:
         '''
@@ -421,14 +424,6 @@ RETURN DISTINCT d.source, collect(node.alias) AS nodes"""
                     if 'file' in k or 'source' in k:
                         source = f"{v} Page: {str(doc.metadata.get('page', 0))}"
                         break
-            # params = {
-            #     "text": doc.page_content,
-            #     "source": doc.metadata.get('source'),
-            #     "properties": doc.metadata
-            # }
-            # new_doc_node = self.graph_query(cquery, params=params)
-            # if self.verbose:
-            #     print(new_doc_node)
             params = {
                 "text": doc.page_content,
                 "source": source,
@@ -438,7 +433,7 @@ RETURN DISTINCT d.source, collect(node.alias) AS nodes"""
             }
             result: List[Dict[str, Any]] = self.graph_query(query, params=params)
             if self.verbose:
-                print(result)
+                logger.info(result)
 
     
     def __get_existing_labels(self) -> Tuple[set, set]:
@@ -488,10 +483,7 @@ RETURN elementType, COLLECT(DISTINCT label) AS labels;"""
                 output_rels: List[Relationship] = format_rels(output.rels)
                 
                 if self.verbose:
-                    print('-'*100)
-                    print(f"Doc # {i+1}")
-                    print(f"Nodes: {output_nodes}")
-                    print(f"Relationships: {output_rels}\n")
+                    logger.info(f"Doc # {i+1}\nNodes:\n{output_nodes}\n\nRelationships:\n{output_rels}\n")
 
                 ntypes = set([n.type for n in output_nodes])
                 # rtypes = set([r.type for r in output_rels])
@@ -527,10 +519,10 @@ RETURN elementType, COLLECT(DISTINCT label) AS labels;"""
             rels: List[Relationship]
         ) -> Tuple[List[Document], List[Node], List[Relationship]]:
 
-        nnodes, nrels = self.disambiguator.run(nodes, rels)
+        nnodes, nrels = self.disambiguator(nodes, rels)
         return nnodes, nrels
 
-    def process_documents(self, docs: List[Document], use_existing_node_types: bool = True):
+    def process_documents(self, docs: List[Document], use_existing_node_types: bool = False):
         docs, nodes, rels = self.docs2nodes_and_rels(docs, use_existing_node_types)
         
         if self.disambiguator is not None:
@@ -540,8 +532,8 @@ RETURN elementType, COLLECT(DISTINCT label) AS labels;"""
             matched_nodes, nodes = link_nodes(nodes, self.emb_model, 0.6, verbose=self.verbose)
         
         if self.verbose:
-            print(f"Matched Nodes:\n{matched_nodes}\n\n")
-            print(f"Unmatched Nodes:\n{nodes}\n")
+            logger.info(f"Matched Nodes:\n{matched_nodes}\n\n")
+            logger.info(f"Unmatched Nodes:\n{nodes}\n")
         self._upsert_matched_nodes(matched_nodes)
         self._upsert_nodes(nodes)
         self._upsert_rels(rels)

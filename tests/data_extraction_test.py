@@ -9,7 +9,8 @@ load_dotenv('../.env')
 # print(os.environ.get("GOOGLE_API_KEY"))
 
 from kgrag.data_extraction import Text2KG
-from kgrag.parse_pdf import PDFParserMarkdown, OCREngine
+# from kgrag.parse_pdf import PDFParserMarkdown, OCREngine
+from kgrag.md_chunks import docs_to_md, chunk_md
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 # from langchain_google_genai.embeddings import GoogleGenerativeAIEmbeddings
@@ -21,10 +22,11 @@ set_llm_cache(InMemoryCache())
 # filepath = "/media/wali/D_Drive/DreamAI/KGRAG_POC/SampleDocs/Technip Process Eng Guide.pdf"
 # filepath = '/media/wali/D_Drive/Documents/FYP/FYP_Biomedical_FinalResearchPaper.pdf'
 # filepath = '/home/wali/FYP_Biomedical_FinalResearchPaper.pdf'
-filepath = '/media/wali/D_Drive/Documents/FYP/Literature/Biomedical_relation_extraction_with_pre-trained_language_representations_and_minimal_task-specific_architecture.pdf'
+# filepath = '/media/wali/D_Drive/Documents/FYP/Literature/Biomedical_relation_extraction_with_pre-trained_language_representations_and_minimal_task-specific_architecture.pdf'
 # filepath = '/media/wali/D_Drive/Documents/FYP/Literature/Linking chemical and disease entities to ontologies by integrating PageRank with extracted relations from literature.pdf'
 # filepath = '/media/wali/D_Drive/Documents/UniCoursesFiles/DeepLearning/Project/Literature/Deep Learning using CNNs for Ball-by-Ball Outcome Classification in Sports.pdf'
 # filepath = '/media/wali/D_Drive/Documents/UniCoursesFiles/DeepLearning/Project/Literature/Sequence to Sequence - Video to Text.pdf'
+filepath = "/media/wali/D_Drive/DreamAI/KGRAG_POC/SampleDocs/kosmos.pdf"
 
 # emb_model=GoogleGenerativeAIEmbeddings(model="models/text-embedding-004", task_type="semantic_similarity")
 # emb_model.embed_query(filepath.split('/')[-1])
@@ -32,25 +34,48 @@ filepath = '/media/wali/D_Drive/Documents/FYP/Literature/Biomedical_relation_ext
 
 llm = ChatGoogleGenerativeAI(model="models/gemini-1.0-pro", temperature=0)
 
-parser = PDFParserMarkdown(
-    pdf_path=filepath,
-    pages=2, #list(range(6, 20)),
-    ocr_engine=OCREngine.PYTESSERACT,
-    # llm=llm,
-    # ocr_llm=ChatGoogleGenerativeAI(model='models/gemini-1.5-flash', temperature=0.1)
-) #, 
+# parser = PDFParserMarkdown(
+#     pdf_path=filepath,
+#     pages=2, #list(range(6, 20)),
+#     ocr_engine=OCREngine.PYTESSERACT,
+#     # llm=llm,
+#     # ocr_llm=ChatGoogleGenerativeAI(model='models/gemini-1.5-flash', temperature=0.1)
+# ) #, 
 
-doc_dicts: List[Dict[str, Any]] = parser.process_pdf_document()
+# doc_dicts: List[Dict[str, Any]] = parser.process_pdf_document()
 
-docs: List[Document] = [
-    Document(
-        page_content=doc['text'],
-        metadata={**doc['page_metadata'], **doc['doc_metadata']}
-    )
-    for doc in doc_dicts
-]
-print(docs[-1])
+# docs: List[Document] = [
+#     Document(
+#         page_content=doc['text'],
+#         metadata={**doc['page_metadata'], **doc['doc_metadata']}
+#     )
+#     for doc in doc_dicts
+# ]
 
+
+mds = docs_to_md(filepath)
+all_docs = []
+for md in mds:
+    chunks = chunk_md(text=md, min_chunk_size=500)
+
+    docs: List[Document] = [
+        Document(
+            page_content=chunk['text'],
+            metadata={
+                "chunk_id": int(chunk_id), 
+                "start": chunk['start'], 
+                "end": chunk['end'], 
+                "filepath": filepath,
+                "source": f"{filepath.split('/')[-1]} Chunk {chunk_id}: {chunk['start']} - {chunk['end']}"
+            }
+        )
+        for chunk_id, chunk in chunks.items()
+    ]
+
+    print(docs[-1])
+    all_docs.extend(docs)
+
+docs = all_docs
 
 text2kg = Text2KG(
     llm=llm,
@@ -62,4 +87,4 @@ text2kg = Text2KG(
     verbose=True
 ) 
 
-text2kg.process_documents(docs)
+text2kg.process_documents(docs[:10])

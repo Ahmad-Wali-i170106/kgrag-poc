@@ -2,6 +2,7 @@ import re
 import json
 from langchain.pydantic_v1 import Field, BaseModel
 from typing import List, Optional, Dict, Any
+from loguru import logger
 
 from langchain_core.prompts import PromptTemplate
 # from langchain_core.output_parsers import JsonOutputParser
@@ -131,7 +132,7 @@ def nodesTextToListOfNodes(nodes_str: List[str]) -> List[Node]:
             ]
             
         except Exception as e:
-            print(e)
+            logger.error(e)
             properties = []
             definition = ""
             aliases = []
@@ -192,7 +193,7 @@ def extract_chapter(text: str, model):
     try:
         res = json.loads(res)
     except:
-        print(res)
+        logger.error(res)
         res = re.findall(": *(.+)}", res, flags=re.I)[-1].strip('\n ').strip('"').strip('\n ')
         res = {"chapter_title": res}
     return res

@@ -1,7 +1,7 @@
 import os
 import re
 import json
-from typing import List, Dict, Any, LiteralString, Optional, Tuple, Generator
+from typing import List, Dict, Any, LiteralString, Tuple
 
 import neo4j
 from neo4j.exceptions import CypherSyntaxError, CypherTypeError
@@ -12,15 +12,18 @@ from langchain_core.runnables import Runnable
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AnyMessage
-
+from langchain_core.embeddings import Embeddings
 from langchain_community.graphs import Neo4jGraph
 
 from langchain_community.vectorstores.neo4j_vector import remove_lucene_chars
+
 from sentence_transformers import SentenceTransformer
 
 from kgrag.data_schema_utils import Entities
 from kgrag.prompts import CYPHER_GENERATION_SYSTEM
 from kgrag.examples_getter import ExamplesGetter
+
+from loguru import logger
 
 def extract_cypher(text: str) -> str:
     """Extract Cypher code from a text.
@@ -197,7 +200,7 @@ LIMIT $limit;
 
 docs_query: LiteralString = """
 MATCH (n: Node)<-[:MENTIONS]-(d:DocumentPage)
-RETURN DISTINCT d.source AS document_source, d.text AS document_text
+RETURN DISTINCT d.source AS document_source, d.text AS document_text, d.chunk_id AS chunk_id
 LIMIT $limit""".strip()
 
 fulltext_search_cypher: LiteralString = """
@@ -280,21 +283,29 @@ class KGSearch:
         self.vec_min_score: float = kwargs.get("vector_search_min_score", 0.75)
         self.max_examples: int = kwargs.get("max_cypher_fewshot_examples", 15)
 
-        if sim_model is None:
+        self.sim_model: SentenceTransformer | Embeddings = sim_model
+        if self.sim_model is None:
             self.sim_model = SentenceTransformer(
                 kwargs.get("embed_model_name", 'sentence-transformers/all-MiniLM-L6-v2'), 
                 cache_folder=os.environ.get("MODELS_CACHE_FOLDER", None),
                 tokenizer_kwargs={"clean_up_tokenization_spaces": False}
             )
+        
 
         self.example_getter = ExamplesGetter(sim_model=self.sim_model, json_filename=cypher_examples_json)
 
         self._include_types: List[str] = kwargs.get("include_node_types", [])
         self._exclude_types: List[str] = kwargs.get("exclude_node_types", [])
         if len(self._include_types) > 0 and len(self._exclude_types) > 0:
-            print("You can provide either of `include_node_types` or `exclude_node_types`.",
+            logger.warning("You can provide either of `include_node_types` or `exclude_node_types`.",
                   "By default, `exclude_node_types` has been ignored (set to empty list []).")
             self._exclude_types = []
+        
+    def _embed(self, sents: List[str]) -> List[List[float]]:
+        if isinstance(self.sim_model, SentenceTransformer):
+            return [list(sent) for sent in self.sim_model.encode(sents)]
+        elif isinstance(self.sim_model, Embeddings):
+            return self.sim_model.embed_documents(sents)
 
     @staticmethod
     def generate_full_text_query(input_str: str) -> str:
@@ -343,7 +354,7 @@ class KGSearch:
         return node_ids
     
     def retrieve_node_ids_vector(self, query: str) -> List[str]:
-        embedding = self.sim_model.encode(query)
+        embedding = self._embed([query])[0]
 
         output: List[Dict[str, str | float]] = self.graph.query(
             vector_search_cypher,
@@ -375,16 +386,16 @@ class KGSearch:
             cypher = cypher.content
         
         cypher = extract_cypher(cypher)
-        print(f"Following Cypher was generated:\n{cypher}")
+        logger.info(f"Following Cypher was generated:\n{cypher}")
         if cypher:
             try:
                 result: List[Dict[str, Any]] = self.graph.query(cypher)[:nresults]
                 result = [json.dumps(res) for res in result]
             except ValueError as ve:
-                print(ve)
+                logger.error(ve)
                 result = []
             except Exception as e:
-                print(e)
+                logger.error(e)
                 result = []
         else:
             result = []
@@ -396,8 +407,9 @@ class KGSearch:
         nresults: int = 100, 
         use_fulltext_search: bool = True, 
         use_vector_search: bool = False,
-        generate_cypher: bool = False
-    ) -> Tuple[List[str], List[str], List[str]]:        
+        generate_cypher: bool = False,
+        return_chunk_ids: bool = True
+    ) -> Tuple[List[str], List[str | int], List[str]]:        
         docs, rels, gen_cypher_results = [], [], []
 
         if use_fulltext_search or use_vector_search:
@@ -413,7 +425,7 @@ class KGSearch:
                 node_ids.update(set(self.retrieve_node_ids_vector(query)))
             
             if len(node_ids) == 0:
-                print("No Nodes were found using Fulltext/Vector Search",
+                logger.info("No Nodes were found using Fulltext/Vector Search",
                       "Generating cypher to retrieve any/all results")
                 gen_cypher_results = self.retrieve_custom_cypher(query, nresults)
                 return [], [], gen_cypher_results
@@ -433,8 +445,10 @@ class KGSearch:
                 else:
                     rels = self.graph.query("UNWIND $node_ids AS nid\nMATCH (n: Node {id: nid})\nReturn n;", {"node_id": list(node_ids)})
                     rels: List[str] = [rel['n'] for rel in rels]
-                docs: List[str] = [f"{doc['document_text']}\nSOURCE: {doc['document_source']}" for doc in docs]
-            # output_string += f"Nodes Relations: {rels}\n{'='*10}\nNode Documents:\n{docs}"
+                if not return_chunk_ids:
+                    docs: List[str] = [f"{doc['document_text']}\nSOURCE: {doc['document_source']}" for doc in docs]
+                else:
+                    docs: List[int] = [int(doc['chunk_id']) for doc in docs]
         
         if generate_cypher:
             gen_cypher_results = self.retrieve_custom_cypher(query, nresults)
@@ -455,7 +469,8 @@ class KGSearch:
             nresults, 
             use_fulltext_search, 
             use_vector_search,
-            generate_cypher
+            generate_cypher,
+            return_chunk_ids=False
         )
 
         output_string = ""

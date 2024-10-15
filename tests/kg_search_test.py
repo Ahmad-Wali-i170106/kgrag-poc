@@ -24,8 +24,8 @@ kg_search = KGSearch(
     vector_search_min_score=0.8
 )
 
-docs, rels, gen_cyph = kg_search.retrieve(
-    "How does relation extraction work?", 
+rels, docs, gen_cyph = kg_search.retrieve(
+    "Tell me everything about kosmos finance internation.", 
     nresults=30,
     use_fulltext_search=True, 
     use_vector_search=True,

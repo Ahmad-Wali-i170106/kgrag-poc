@@ -2,14 +2,17 @@ import os
 import re
 import json
 import requests
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+from langchain_core.embeddings import Embeddings
 import numpy as np
 
 from kgrag.data_schema_utils import * 
+
+from loguru import logger
 
 @lru_cache(maxsize=1000)
 def wikidata_fetch(url: str, params: frozenset) -> Dict[str, Any]:
@@ -18,7 +21,7 @@ def wikidata_fetch(url: str, params: frozenset) -> Dict[str, Any]:
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
-        print(f"Error fetching data: {e}")
+        logger.error(f"Error fetching data: {e}")
         return {}
 
 def wikidata_search(query: str) -> List[Dict[str, Any]]:
@@ -95,11 +98,16 @@ def wikidata_search(query: str) -> List[Dict[str, Any]]:
 
     return list(search_results.values())
 
-def calculate_cosine_similarity(sentences: List[str], model: SentenceTransformer) -> np.ndarray:
-    sentence_embeddings = model.encode(sentences)
+def calculate_cosine_similarity(sentences: List[str], model: SentenceTransformer | Embeddings) -> np.ndarray:
+    if isinstance(model, SentenceTransformer):
+        sentence_embeddings = model.encode(sentences)
+    elif isinstance(model, Embeddings):
+        sentence_embeddings = model.embed_documents(sentences)
+    else:
+        raise TypeError("The embedding model must of either type sentence_transformers.SentenceTransformer or langchain_core.embeddings.Embeddings")
     return cosine_similarity([sentence_embeddings[0]], sentence_embeddings[1:]).flatten()
 
-def link_nodes(entities: List[Node], model: Optional[SentenceTransformer] = None, 
+def link_nodes(entities: List[Node], model: SentenceTransformer | Embeddings | None = None, 
                sim_thresh: float = 0.5, verbose: bool = False) -> Tuple[List[Dict[str, Any]], List[Node]]:
     if model is None:
         model = SentenceTransformer(
@@ -146,7 +154,7 @@ def link_nodes(entities: List[Node], model: Optional[SentenceTransformer] = None
                 'properties': {p.key: p.value for p in entity.properties}
             })
             if verbose:
-                print(f"Matched Node {entity} to Wikidata entity {best_match}\n")
+                logger.info(f"Matched Node {entity} to Wikidata entity {best_match}\n")
 
     return matched_nodes, unmatched_nodes
 
@@ -159,5 +167,5 @@ if __name__ == "__main__":
     q = "Relation Type"
     results = wikidata_search(q)
     for r in results:
-        print(r)
-        print()
+        logger.info(f"{r}\n")
+        

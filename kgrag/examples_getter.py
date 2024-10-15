@@ -2,6 +2,7 @@ import os
 from typing import List, Dict, Any, Optional
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
+from langchain_core.embeddings import Embeddings
 
 class ExamplesGetter:
     
@@ -9,7 +10,7 @@ class ExamplesGetter:
             self, 
             use_milvus: bool = False, 
             json_filename: str | None = None, 
-            sim_model: Optional[SentenceTransformer] = None,
+            sim_model: Optional[SentenceTransformer | Embeddings] = None,
             milvus_kwargs: dict = {}, 
             **kwargs
         ):
@@ -46,9 +47,15 @@ class ExamplesGetter:
 CYPHER: ```{example['cypher']}```
 """
     
+    def _embed(self, sents: List[str]) -> List[List[float]]:
+        if isinstance(self.sim_model, SentenceTransformer):
+            return [list(sent) for sent in self.sim_model.encode(sents)]
+        elif isinstance(self.sim_model, Embeddings):
+            return self.sim_model.embed_documents(sents)
+
     def get_examples(self, query: str, top_k: int = 20, sim_cutoff: float = 0.5) -> List[str]:
         if self.examples is not None:
-            similarities = cosine_similarity(self.sim_model.encode([query]), self._embeddings).flatten()
+            similarities = cosine_similarity(self._embed([query]), self._embeddings).flatten()
             examples = [(self.examples[idx], sim) for idx, sim in enumerate(similarities) if sim >= sim_cutoff]
             examples = sorted(examples, key=lambda x: x[1], reverse=True)
             print(examples)
@@ -63,7 +70,7 @@ CYPHER: ```{example['cypher']}```
         import json
         with open(json_filename, "r") as f:
             examples: List[Dict[str, str]] = json.load(f)
-        new_embeddings = self.sim_model.encode([e['question'] for e in examples])
+        new_embeddings = self._embed([e['question'] for e in examples])
         if keep_old:
             self.examples += examples
             self._embeddings += new_embeddings
@@ -75,7 +82,7 @@ CYPHER: ```{example['cypher']}```
         if self.examples is not None:
             if len(examples) == 0:
                 return
-            new_embeddings = self.sim_model.encode([e['question'] for e in examples])
+            new_embeddings = self._embed([e['question'] for e in examples])
             self.examples += examples
             self._embeddings += new_embeddings
         else:
