@@ -59,21 +59,21 @@ def generate_full_text_query(input_str: str) -> str:
     full_text_query += f"{words[-1]}~2"
     return full_text_query.strip()
 
-def get_extraction_chain(llm: BaseLanguageModel) -> RunnableSerializable[Dict, Dict | BaseModel]:
+def get_extraction_chain(llm: BaseLanguageModel, prompt: str = DATA_EXTRACTION_SYSTEM) -> RunnableSerializable[Dict, Dict | BaseModel]:
 
     from langchain_google_genai.llms import _BaseGoogleGenerativeAI
 
     if isinstance(llm, _BaseGoogleGenerativeAI) and 'gemini-1.0' in llm.model:
         prompt: ChatPromptTemplate = ChatPromptTemplate.from_messages(
         [
-            ("human", DATA_EXTRACTION_SYSTEM),
+            ("human", prompt),
             ("human", "Use the given format to extract information from the following input which is a small sample from a much larger text belonging to the same subject matter: {input}"),
             ("human", "Tip: Make sure to answer in the correct format"),   
         ])
     else:
         prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", DATA_EXTRACTION_SYSTEM),
+            ("system", prompt),
             ("human", "Use the given format to extract information from the following input which is a small sample from a much larger text belonging to the same subject matter: {input}"),
             ("human", "Tip: Make sure to answer in the correct format"),
         ])
@@ -86,12 +86,32 @@ class Text2KG:
     def __init__(
             self, 
             llm: BaseLanguageModel, 
-            emb_model: Embeddings | None = None, 
-            disambiguate_nodes: bool = False,
+            emb_model: Embeddings | SentenceTransformer | None = None, 
+            data_ext_prompt: str = DATA_EXTRACTION_SYSTEM,
+            # disambiguate_nodes: bool = False,
             link_nodes: bool = True,
             **kwargs
         ) -> None:
+        """
+        The Text 2 Knowledge Graph converter
 
+        Params:
+            
+            llm (language_core.language_models.BaseLanguageModel): The LLM to use
+            
+            emb_model (language_core.language_models.Embeddings | sentence_transformers.SentenceTransformer): The embeddings model. Default=None.
+            
+            data_ext_prompt (str): The prompt to use in the data extraction chain. Default=DATA_EXTRACTION_SYSTEM.
+            
+            link_nodes (bool): Whether to link the nodes or not. Default=True
+
+            neo4j_url (str): The full URL to the Neo4j server. Default="bolt://localhost:7687"
+
+            neo4j_username (str): The username of the Neo4j authenticated user. Default="neo4j"
+
+            neo4j_password (str): The password of the Neo4j server authentication. Default=None
+
+        """
         
         url: str = os.environ.get("NEO4J_URL", kwargs.get("neo4j_url", "bolt://localhost:7687"))
         username: str = os.environ.get("NEO4J_USERNAME", kwargs.get("neo4j_username", "neo4j"))
@@ -109,11 +129,14 @@ class Text2KG:
             raise ValueError(
                 "Could not connect to Neo4j database. "
                 "Please ensure that the url is correct"
+                "Either set it using the NEO4J_URL environment variable or pass the neo4j_url argument"
             )
         except neo4j.exceptions.AuthError:
             raise ValueError(
                 "Could not connect to Neo4j database. "
                 "Please ensure that the username and password are correct"
+                "Either set the username and password using the NEO4J_USERNAME and NEO4J_PASSWORD environment variables."
+                "Or pass the neo4j_username and neo4j_password arguments."
             )
 
         self.verbose: bool = kwargs.get("verbose", False)
@@ -128,7 +151,7 @@ class Text2KG:
             self.text_subject: str = f"""The input text has the following subject/topic/filename: `{text_subject}`.
 You must extract information that appears most relevant to this provided subject."""
 
-        self.data_ext_chain: RunnableSerializable[Dict, Dict | BaseModel] = get_extraction_chain(llm)
+        self.data_ext_chain: RunnableSerializable[Dict, Dict | BaseModel] = get_extraction_chain(llm, data_ext_prompt)
         if emb_model is None:
             emb_model = SentenceTransformer(
                 kwargs.get("embed_model_name", 'sentence-transformers/all-MiniLM-L6-v2'), 
@@ -470,13 +493,17 @@ RETURN elementType, COLLECT(DISTINCT label) AS labels;"""
             output = None
 
             if len(doc.page_content) >= 15:
-                output: KnowledgeGraph = self.data_ext_chain.invoke(
-                    {
-                        "subject": self.text_subject,
-                        "input": doc.page_content, 
-                        "node_types": ','.join(list(ex_node_types))
-                    } # 'rel_types': ','.join(list(ex_rel_types))
-                )
+                try:
+                    output: KnowledgeGraph = self.data_ext_chain.invoke(
+                        {
+                            "subject": self.text_subject,
+                            "input": doc.page_content, 
+                            "node_types": ','.join(list(ex_node_types))
+                        } # 'rel_types': ','.join(list(ex_rel_types))
+                    )
+                except Exception as e:
+                    logger.error(e)
+                    output = None
             
             if output is not None:
                 output_nodes: List[Node] = format_nodes(output.nodes)

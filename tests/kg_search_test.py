@@ -25,10 +25,11 @@ kg_search = KGSearch(
 )
 
 rels, docs, gen_cyph = kg_search.retrieve(
-    "Tell me everything about kosmos finance internation.", 
+    "Tell me everything about kosmos finance international.", 
     nresults=30,
     use_fulltext_search=True, 
     use_vector_search=True,
-    generate_cypher=False
+    generate_cypher=True,
+    return_chunk_ids=True
 )
 print(rels)

@@ -195,13 +195,12 @@ class DaiNeo4jGraph(Neo4jGraph):
 rels_query: LiteralString = """
 MATCH (n: Node)-[r:!MENTIONS]-(m: Node)
 RETURN DISTINCT n, m, type(r) AS r
-LIMIT $limit;
 """.strip()
 
 docs_query: LiteralString = """
 MATCH (n: Node)<-[:MENTIONS]-(d:DocumentPage)
 RETURN DISTINCT d.source AS document_source, d.text AS document_text, d.chunk_id AS chunk_id
-LIMIT $limit""".strip()
+""".strip()
 
 fulltext_search_cypher: LiteralString = """
 CALL db.index.fulltext.queryNodes(
@@ -228,7 +227,7 @@ class KGSearch:
             self, 
             ent_llm: BaseLanguageModel, 
             cypher_llm: BaseLanguageModel, 
-            sim_model: SentenceTransformer | None = None,
+            sim_model: SentenceTransformer | Embeddings | None = None,
             cypher_examples_json: str | None = None, 
             **kwargs
         ):
@@ -404,7 +403,7 @@ class KGSearch:
     def retrieve(
         self, 
         query: str, 
-        nresults: int = 100, 
+        nresults: int | None = None, 
         use_fulltext_search: bool = True, 
         use_vector_search: bool = False,
         generate_cypher: bool = False,
@@ -430,15 +429,28 @@ class KGSearch:
                 gen_cypher_results = self.retrieve_custom_cypher(query, nresults)
                 return [], [], gen_cypher_results
             else:
-                rels = self.graph.query(
-                    f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{rels_query}", 
-                    {"node_ids": list(node_ids), "limit": nresults},
-                    include_nodes_in_rels=False
-                )
-                docs = self.graph.query(
-                    f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{docs_query}", 
-                    {"node_ids": list(node_ids), "limit": nresults}
-                )
+                if nresults is not None:
+                    rels = self.graph.query(
+                        f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{rels_query}\nLIMIT $limit", 
+                        {"node_ids": list(node_ids), "limit": max(int(nresults), 1)},
+                        include_nodes_in_rels=False
+                    )
+
+                    docs = self.graph.query(
+                        f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{docs_query}\nLIMIT $limit", 
+                        {"node_ids": list(node_ids), "limit": max(int(nresults), 1)}
+                    )
+                else:
+                    rels = self.graph.query(
+                        f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{rels_query}", 
+                        {"node_ids": list(node_ids)},
+                        include_nodes_in_rels=False
+                    )
+
+                    docs = self.graph.query(
+                        f"UNWIND $node_ids AS nid\nMATCH (n: Node {{id: nid}})\n{docs_query}", 
+                        {"node_ids": list(node_ids)}
+                    )
                 # rels: str = '\n'.join([rel['output_string'] for rel in rels])
                 if len(rels) > 0:
                     rels: List[str] = [f"({rel['n']})-[:{rel['r']}]->({rel['m']})" for rel in rels]
@@ -459,7 +471,7 @@ class KGSearch:
     def retrieve_as_string(
         self,
         query: str, 
-        nresults: int = 100, 
+        nresults: int | None = None, 
         use_fulltext_search: bool = True, 
         use_vector_search: bool = False,
         generate_cypher: bool = False

@@ -8,13 +8,14 @@ class ExamplesGetter:
     
     def __init__(
             self, 
-            use_milvus: bool = False, 
+            # use_milvus: bool = False, 
             json_filename: str | None = None, 
             sim_model: Optional[SentenceTransformer | Embeddings] = None,
             milvus_kwargs: dict = {}, 
             **kwargs
         ):
         
+        use_milvus = False
         self.sim_model = sim_model
         if self.sim_model is None:
             self.sim_model = SentenceTransformer(
@@ -58,7 +59,6 @@ CYPHER: ```{example['cypher']}```
             similarities = cosine_similarity(self._embed([query]), self._embeddings).flatten()
             examples = [(self.examples[idx], sim) for idx, sim in enumerate(similarities) if sim >= sim_cutoff]
             examples = sorted(examples, key=lambda x: x[1], reverse=True)
-            print(examples)
             return [self.format_example(ex) for ex, score in examples][:top_k]
         else:
             # TODO: Query Milvus and return `top_k` similar examples

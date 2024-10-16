@@ -32,7 +32,7 @@ filepath = "/media/wali/D_Drive/DreamAI/KGRAG_POC/SampleDocs/kosmos.pdf"
 # emb_model.embed_query(filepath.split('/')[-1])
 # "Research Paper: Biomedical Gene Disease Annotation Tool (BioGDAT)",
 
-llm = ChatGoogleGenerativeAI(model="models/gemini-1.0-pro", temperature=0)
+llm = ChatGoogleGenerativeAI(model="models/gemini-1.5-flash-002", temperature=0)
 
 # parser = PDFParserMarkdown(
 #     pdf_path=filepath,
@@ -56,7 +56,7 @@ llm = ChatGoogleGenerativeAI(model="models/gemini-1.0-pro", temperature=0)
 mds = docs_to_md(filepath)
 all_docs = []
 for md in mds:
-    chunks = chunk_md(text=md, min_chunk_size=500)
+    chunks = chunk_md(text=md)
 
     docs: List[Document] = [
         Document(
@@ -80,11 +80,10 @@ docs = all_docs
 text2kg = Text2KG(
     llm=llm,
     emb_model=None, #emb_model,
-    disambiguate_nodes=False,
     link_nodes=True,
     node_vector_similarity_threshold=0.90,
-    subject=filepath.split('/')[-1].split('.')[0].replace('_',' '), #"Deep Learning and Artificial Intelligence",
+    subject="A finance agreement", #filepath.split('/')[-1].split('.')[0].replace('_',' '), #"Deep Learning and Artificial Intelligence",
     verbose=True
 ) 
 
-text2kg.process_documents(docs[:10])
+text2kg.process_documents(docs)
