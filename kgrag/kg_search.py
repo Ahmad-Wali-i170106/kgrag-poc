@@ -231,6 +231,39 @@ class KGSearch:
             cypher_examples_json: str | None = None, 
             **kwargs
         ):
+        
+        '''
+        Args:
+            ent_llm (langchain_core.language_models.BaseLanguageModel): The Language Model to use to extract entities
+            cypher_llm (langchain_core.language_models.BaseLanguageModel): The language model to use to generate cypher
+            sim_model (sentence_transformers.SentenceTransformer | langchain_core.embeddings.Embeddings): 
+                        The embedding model to use to generate the embeddings for calculating vector similarity. 
+                        Should be same as the one used  in the KG creation process. Default=None
+            cypher_examples_json (str): The path to the JSON file containing a list of cypher examples in the format
+                                        {"question": <query>, "cypher": <cypher>}
+            neo4j_url (str): The full url to the Neo4j server. If NEO4J_URL environment variable is set, uses that instead.
+                            Default="bolt://localhost:7687"
+            neo4j_username (str): The username to provide for authentication to the Neo4j server.
+                                  If NEO4J_USERNAME env variable is set, uses that instead. Default="neo4j"
+            neo4j_password (str): The password to provide for authentication to the Neo4j server.
+                                  If NEO4J_PASSWORD env variable is set, uses that instead. Default=None
+            neo4j_database (str): The neo4j database name to query. If NEO4J_DATABASE env variable is set, uses that instead. Default="neo4j"
+            
+            fulltext_search_max_difference (float): The maximum score difference allowed between 2 consecutive
+                                fulltext search results. Default=2.0. 
+                                Use to make sure that search results are always close to each other.
+            fulltext_search_min_score (float): The minimum score of a fulltext search result for it to be considered.
+                                            Default=1.0
+            fulltext_search_top_k (int): The top 'k' fulltext search results to consider. Default=10
+            vector_search_top_k (int): The top 'k' vector search results to consider. Default=15
+            vector_search_min_score (float): The minimum score of vector search result for it to be considered.
+                                            Default=0.75 where 0 <= score <= 1.0.
+            max_cypher_fewshot_examples (int): The maximum number of similar cypher fewshot examples given in 
+                                                `cypher_examples_json` to choose dynamically. Default=15
+            
+            embed_model_name (str): Only used when sim_model is None. The name of the SentenceTransformer model
+                                to use for generating embeddings.Default="sentence-transformers/all-MiniLM-L6-v2"
+        '''
 
         url: str = os.environ.get("NEO4J_URL", kwargs.get("neo4j_url", "bolt://localhost:7687"))
         username: str = os.environ.get("NEO4J_USERNAME", kwargs.get("neo4j_username", "neo4j"))
@@ -290,8 +323,10 @@ class KGSearch:
                 tokenizer_kwargs={"clean_up_tokenization_spaces": False}
             )
         
-
-        self.example_getter = ExamplesGetter(sim_model=self.sim_model, json_filename=cypher_examples_json)
+        
+        self.example_getter = None
+        if cypher_examples_json is None or len(cypher_examples_json) == 0:
+            self.example_getter = ExamplesGetter(sim_model=self.sim_model, json_filename=cypher_examples_json)
 
         self._include_types: List[str] = kwargs.get("include_node_types", [])
         self._exclude_types: List[str] = kwargs.get("exclude_node_types", [])
@@ -367,10 +402,18 @@ class KGSearch:
         return node_ids
     
     def retrieve_custom_cypher(self, query: str, nresults: int) -> List[str]:
-        examples: List[str] = self.example_getter.get_examples(query, top_k=self.max_examples, sim_cutoff=0.1)
-        examples: str = '\n'.join(examples)
-        examples = f"""Examples: Here are a few examples of generated Cypher statements for particular questions:
+        if self.example_getter is None:
+            examples = ""
+        else:
+            examples: List[str] = self.example_getter.get_examples(query, top_k=self.max_examples, sim_cutoff=0.1)
+            examples: str = '\n'.join(examples)
+        
+        if len(examples) > 0:
+            examples = f"""Examples: Here are a few examples of generated Cypher statements for particular questions:
+
 {examples}"""
+        else:
+            examples = ""
         graph_schema = construct_schema(
             self.graph.get_structured_schema, self._include_types, self._exclude_types
         )

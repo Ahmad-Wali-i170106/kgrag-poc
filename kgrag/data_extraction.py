@@ -99,19 +99,34 @@ class Text2KG:
             
             llm (language_core.language_models.BaseLanguageModel): The LLM to use
             
-            emb_model (language_core.language_models.Embeddings | sentence_transformers.SentenceTransformer): The embeddings model. Default=None.
+            emb_model (language_core.language_models.Embeddings | sentence_transformers.SentenceTransformer | None): The embeddings model. Default=None.
             
             data_ext_prompt (str): The prompt to use in the data extraction chain. Default=DATA_EXTRACTION_SYSTEM.
             
             link_nodes (bool): Whether to link the nodes or not. Default=True
+            
+            subject (str | None): Optional. The subject or topic that the documents provided will likely belong to.
+                                    Default=None
 
             neo4j_url (str): The full URL to the Neo4j server. Default="bolt://localhost:7687"
 
             neo4j_username (str): The username of the Neo4j authenticated user. Default="neo4j"
 
             neo4j_password (str): The password of the Neo4j server authentication. Default=None
-
-        """
+            
+            neo4j_database (str): The name of the Neo4j database to use. Default="neo4j".
+            
+            embed_model_name (str): Only used when emb_model is None. The name of the SentenceTransformer model
+                                to use for generating embeddings.Default="sentence-transformers/all-MiniLM-L6-v2"
+            
+            node_vector_similarity_threshold (float): The minimum vector similarity score to match a new node to an
+                                existing node. Default=0.85 (0<=score<=1.0)
+            
+            node_id_fulltext_similarity_threshold (float): The minimum fulltext similarity score to match the node ID
+                                of a node mentioned in a relationship or document to an existing node. Default=1.0
+            
+            verbose (bool): Whether to log/print the progress of the KG creation process. Default=False
+         """
         
         url: str = os.environ.get("NEO4J_URL", kwargs.get("neo4j_url", "bolt://localhost:7687"))
         username: str = os.environ.get("NEO4J_USERNAME", kwargs.get("neo4j_username", "neo4j"))
@@ -290,8 +305,8 @@ RETURN DISTINCT nnn;
         for bnodes in chunks(nodes, self._node_batch_size):
             
             result: List[Dict[str, Any]] = self.graph_query(query, params={"nodes": bnodes, "similarity_threshold": self._sim_thresh})
-            if self.verbose:
-                logger.info(result)
+            # if self.verbose:
+            #     logger.info(result)
 
     def _upsert_matched_nodes(self, nodes: List[Dict[str, str]]):
         '''
@@ -358,9 +373,10 @@ RETURN nne{.id, .alias, .labels};
             }
             for i, node in enumerate(nodes)
         ]
-        result: List[Dict[str, Any]] = self.graph_query(query, params={"nodes": nodes})
-        if self.verbose:
-            logger.info(result)
+        for cnodes in chunks(nodes, 500):
+            result: List[Dict[str, Any]] = self.graph_query(query, params={"nodes": cnodes})
+            # if self.verbose:
+            #     logger.info(result)
 
     def _upsert_rels(self, rels: List[Relationship]) -> None:
         '''
@@ -398,9 +414,10 @@ RETURN DISTINCT start_node{.id,.alias}, rel, end_node{.id, .alias};
             }
             for rel in rels
         ]
-        new_rels: List[Dict[str, Any]] = self.graph_query(query, params={"rels": rels, "similarity_threshold": self._ft_sim_thresh})
-        if self.verbose:
-            logger.info(new_rels)
+        for crels in chunks(rels, 500):
+            new_rels: List[Dict[str, Any]] = self.graph_query(query, params={"rels": crels, "similarity_threshold": self._ft_sim_thresh})
+            # if self.verbose:
+            #     logger.info(new_rels)
 
     def _create_text_nodes(self, docs: List[Document]) -> None:
         '''
@@ -455,11 +472,11 @@ RETURN DISTINCT d.source, collect(node.alias) AS nodes"""
                 "similarity_threshold": self._ft_sim_thresh
             }
             result: List[Dict[str, Any]] = self.graph_query(query, params=params)
-            if self.verbose:
-                logger.info(result)
+            # if self.verbose:
+            #     logger.info(result)
 
     
-    def __get_existing_labels(self) -> Tuple[set, set]:
+    def __get_existing_node_labels(self) -> Tuple[set, set]:
 
         labels_query = """CALL apoc.meta.data() YIELD label, elementType
 WHERE NOT label IN $EXCLUDED_LABELS
@@ -471,23 +488,15 @@ RETURN elementType, COLLECT(DISTINCT label) AS labels;"""
         for lab_dict in all_labels:
             if lab_dict['elementType'] == 'node':
                 node_labels.extend(lab_dict['labels'])
-            elif lab_dict['elementType'] == 'relationship':
-                rel_labels.extend(lab_dict['labels'])
 
-        return set(node_labels), set(rel_labels) 
+        return set(node_labels)
 
     
-    def docs2nodes_and_rels(self, docs: List[Document], use_existing_node_types: bool) -> Tuple[List[Document], List[Node], List[Relationship]]:
+    def docs2nodes_and_rels(self, docs: List[Document], ex_node_types: set) -> Tuple[List[Document], List[Node], List[Relationship]]:
         
         # Only store unique nodes and relationships - Helps later when adding to neo4j
         nodes_dict: Dict[str, list] = dict({})
         rels: list = []
-        
-        ex_node_types = set({})
-        # ex_rel_types = set({})
-        if use_existing_node_types:
-            ex_node_types, _ = self.__get_existing_labels()
-        
 
         for i, doc in enumerate(docs):
             output = None
@@ -550,18 +559,24 @@ RETURN elementType, COLLECT(DISTINCT label) AS labels;"""
         return nnodes, nrels
 
     def process_documents(self, docs: List[Document], use_existing_node_types: bool = False):
-        docs, nodes, rels = self.docs2nodes_and_rels(docs, use_existing_node_types)
         
-        if self.disambiguator is not None:
-            nodes, rels = self.disambiguate_nodes(nodes, rels)
+        ex_node_types = set({})
+        if use_existing_node_types:
+            ex_node_types = self.__get_existing_node_labels()
+        
+        for i, cdocs in enumerate(chunks(docs, 50)):
+            if self.verbose:
+                logger.info(f"BATCH {i+1}\n{'='*100}")
+            
+            cdocs, nodes, rels = self.docs2nodes_and_rels(cdocs, ex_node_types)
 
-        if self.link_nodes:
-            matched_nodes, nodes = link_nodes(nodes, self.emb_model, 0.6, verbose=self.verbose)
-        
-        if self.verbose:
-            logger.info(f"Matched Nodes:\n{matched_nodes}\n\n")
-            logger.info(f"Unmatched Nodes:\n{nodes}\n")
-        self._upsert_matched_nodes(matched_nodes)
-        self._upsert_nodes(nodes)
-        self._upsert_rels(rels)
-        self._create_text_nodes(docs)
+            if self.disambiguator is not None:
+                nodes, rels = self.disambiguate_nodes(nodes, rels)
+
+            if self.link_nodes:
+                matched_nodes, nodes = link_nodes(nodes, self.emb_model, 0.6, verbose=self.verbose)
+
+            self._upsert_matched_nodes(matched_nodes)
+            self._upsert_nodes(nodes)
+            self._upsert_rels(rels)
+            self._create_text_nodes(cdocs)
