@@ -23,6 +23,13 @@ from kgrag.data_schema_utils import Entities
 from kgrag.prompts import CYPHER_GENERATION_SYSTEM
 from kgrag.examples_getter import ExamplesGetter
 
+def escape_lucene_special_characters(text) -> str:
+    # List of special characters in Lucene query syntax
+    special_chars = r'[+\-!(){}[\]^"~*?:\\/]'
+    
+    # Function to add a backslash before each special character
+    return re.sub(special_chars, r'\\\g<0>', text)
+
 from loguru import logger
 
 def extract_cypher(text: str) -> str:
@@ -353,7 +360,7 @@ class KGSearch:
         to database values, and allows for some misspelings.
         """
         
-        input_str = remove_lucene_chars(input_str.lower())
+        input_str = escape_lucene_special_characters(remove_lucene_chars(input_str.lower()))
         words: List[str] = [el for el in input_str.split() if len(el) > 0]
         if len(words) <= 1:
             return input_str.strip()

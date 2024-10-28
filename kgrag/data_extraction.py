@@ -453,7 +453,7 @@ RETURN DISTINCT d.source, collect(node.alias) AS nodes"""
 
             source: str = doc.metadata.pop("source", '')
             if source is not None or len(source) > 0:
-                if not "page" in source.lower():
+                if not "page" in source.lower() or not "chunk" in source.lower():
                     source = f"{source.split('/')[-1]} Page: {str(doc.metadata.get('page', 0))}"
             elif 'filename' in doc.metadata:
                 source = f"{doc.metadata.get('filename', '').split('/')[-1]} Page: {str(doc.metadata.get('page', 0))}"
@@ -519,7 +519,9 @@ RETURN elementType, COLLECT(DISTINCT label) AS labels;"""
                 output_rels: List[Relationship] = format_rels(output.rels)
                 
                 if self.verbose:
-                    logger.info(f"Doc # {i+1}\nNodes:\n{output_nodes}\n\nRelationships:\n{output_rels}\n")
+                    logger.info(f"Doc # {i+1}:- Number of Nodes Extracted: {len(output_nodes)}")
+                    logger.info(f"Doc # {i+1}:- Number of Relationships Extracted: {len(output_rels)}")
+                    # logger.info(f"Doc # {i+1}\nNodes:\n{output_nodes}\n\nRelationships:\n{output_rels}\n")
 
                 ntypes = set([n.type for n in output_nodes])
                 # rtypes = set([r.type for r in output_rels])
