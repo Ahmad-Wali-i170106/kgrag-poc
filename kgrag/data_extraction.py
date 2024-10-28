@@ -60,10 +60,8 @@ def generate_full_text_query(input_str: str) -> str:
     return full_text_query.strip()
 
 def get_extraction_chain(llm: BaseLanguageModel, prompt: str = DATA_EXTRACTION_SYSTEM) -> RunnableSerializable[Dict, Dict | BaseModel]:
-
-    from langchain_google_genai.llms import _BaseGoogleGenerativeAI
-
-    if isinstance(llm, _BaseGoogleGenerativeAI) and 'gemini-1.0' in llm.model:
+    
+    if 'gemini-1.0' in llm.model:
         prompt: ChatPromptTemplate = ChatPromptTemplate.from_messages(
         [
             ("human", prompt),
@@ -561,6 +559,18 @@ RETURN elementType, COLLECT(DISTINCT label) AS labels;"""
         return nnodes, nrels
 
     def process_documents(self, docs: List[Document], use_existing_node_types: bool = False):
+        '''
+        The core function that processes the list of Documents and adds the extracted information into a Knowledge Graph
+     
+        Args:
+            docs (list[langchain_core.documents.base.Document]): The list of documents to process
+            
+            use_existing_node_types (bool): Whether to use the node types already present in the KG in the data extraction prompt. Slightly limits the LLM in the node types of the nodes that it can extract.
+        
+        Returns:
+            None
+        
+        '''
         
         ex_node_types = set({})
         if use_existing_node_types:

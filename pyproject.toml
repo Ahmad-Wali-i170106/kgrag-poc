@@ -2,7 +2,7 @@
 name = "kgrag"
 version = "0.1.0"
 description = ""
-authors = ["Ahmad-Wali-i170106 <wali26.pakistan@yahoo.com>"]
+authors = ["Ahmad-Wali-i170106 <wali26.pakistan@yahoo.com>", "AhmadAliBinSaeed <ali26.pakistan@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]

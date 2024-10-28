@@ -455,10 +455,36 @@ class KGSearch:
         query: str, 
         nresults: int | None = None, 
         use_fulltext_search: bool = True, 
-        use_vector_search: bool = False,
+        use_vector_search: bool = True,
         generate_cypher: bool = False,
         return_chunk_ids: bool = True
-    ) -> Tuple[List[str], List[str | int], List[str]]:        
+    ) -> Tuple[List[str], List[str | int], List[str]]:
+        '''
+        Args:
+            
+            query (str): The search query
+            
+            nresults (int): The number of results to return. Default=None (Return all results)
+            
+            use_fulltext_search (bool): Whether to use fulltext search to search for nodes. Default=True
+            
+            use_vector_search (bool): Whether to use vector search to search for nodes. Default=True
+            
+            generate_cypher (bool): Whether to generate cypher from user query to get results. Default=False
+            
+            return_chunk_ids (bool): Whether to return the chunk IDs of the chunks/docs that are found. Otherwise, return the text content of the docs/chunks
+            
+        Returns:
+            
+            rels: All the triples that the entities/nodes in the query are involved in
+                 Empty list is returned if `use_fulltext_search=False` && `use_vector_search=False`
+     
+            docs: All the documents that contain any entities mentioned in the query
+                 Empty list is returned if `use_fulltext_search=False` && `use_vector_search=False`
+                 If return_chunk_ids=True, returns chunk_ids as set during text2kg conversion / data insertion process
+            gen_cypher_results: List of string/JSON results from the generated cypher
+                                 Empty list is returned if `generate_cypher=False
+        '''
         docs, rels, gen_cypher_results = [], [], []
 
         if use_fulltext_search or use_vector_search:
